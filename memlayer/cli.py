@@ -339,6 +339,85 @@ def cmd_import(args) -> int:
     return 0
 
 
+def cmd_reflect(args) -> int:
+    """Run a reflection pass: distill higher-order insights from episodes."""
+    mem = _open_memory(args)
+    try:
+        result = mem.reflect(user_id=args.user, window=args.window)
+        print(f"Examined {result['examined_episodes']} episodes.")
+        if not result["insights"]:
+            print("No new insights — that's normal when little has happened.")
+            return 0
+        for ins in result["insights"]:
+            print(f"  insight: {ins['content']}")
+    finally:
+        mem.close()
+    return 0
+
+
+def cmd_history(args) -> int:
+    """Show provenance + audit trail of one memory (no API key needed)."""
+    from .core import MemoryLayer
+
+    mem = MemoryLayer(db_path=_db_path(args))  # store-only: no key required
+    try:
+        h = mem.history(args.id)
+        if h is None:
+            print(f"No memory with id {args.id}")
+            return 1
+        rec = h["record"]
+        print(f"memory  {rec['id']}")
+        print(f"type    {rec['memory_type']}  category={rec['category']}")
+        print(f"content {rec['content']}")
+        print(f"strength {rec['strength']:.2f}  retention {h['retention']:.3f}"
+              f"  recalled {rec['access_count']}x")
+        if len(h["versions"]) > 1:
+            print("\nversions (oldest first):")
+            for v in h["versions"]:
+                status = "CURRENT" if v["valid_until"] is None else (
+                    "superseded " + _fmt_date(v["valid_until"]))
+                print(f"  [{status}] {v['content']}")
+        if h["sources"]:
+            print("\nderived from:")
+            for s in h["sources"]:
+                print(f"  ({_fmt_date(s['created_at'])}) {s['content'][:100]}")
+        if h["audit"]:
+            print("\naudit trail:")
+            for a in h["audit"]:
+                line = f"  {_fmt_date(a['ts'])}  {a['action']}"
+                if a["reasoning"]:
+                    line += f"  - {a['reasoning']}"
+                print(line)
+    finally:
+        mem.close()
+    return 0
+
+
+def cmd_audit(args) -> int:
+    """Show the recent memory audit log (no API key needed)."""
+    from .core import MemoryLayer
+
+    mem = MemoryLayer(db_path=_db_path(args))
+    try:
+        entries = mem.audit_log(
+            user_id=None if args.all_users else args.user, limit=args.limit
+        )
+        if not entries:
+            print("Audit log is empty.")
+            return 0
+        for e in entries:
+            mid = (e["memory_id"] or "")[:8]
+            line = f"{_fmt_date(e['ts'])}  {e['action']:<16} {mid:<9}"
+            if e["reasoning"]:
+                line += f" {e['reasoning']}"
+            elif e["detail"]:
+                line += f" {json.dumps(e['detail'], ensure_ascii=False)[:90]}"
+            print(line)
+    finally:
+        mem.close()
+    return 0
+
+
 def cmd_prune(args) -> int:
     mem = _open_memory(args)  # prune is store-only: works without an API key
     try:
@@ -529,6 +608,23 @@ def build_parser() -> argparse.ArgumentParser:
                    help="older than this many days (default: %(default)s)")
     p.add_argument("--max-importance", type=float, default=0.4)
     p.set_defaults(func=cmd_prune)
+
+    p = sub.add_parser("reflect", parents=[common],
+                       help="distill higher-order insights from recent episodes")
+    p.add_argument("--window", type=int, default=None,
+                   help="number of recent episodes to review")
+    p.set_defaults(func=cmd_reflect)
+
+    p = sub.add_parser("history", parents=[common],
+                       help="provenance + audit trail of a memory (no API key)")
+    p.add_argument("id")
+    p.set_defaults(func=cmd_history)
+
+    p = sub.add_parser("audit", parents=[common],
+                       help="show the memory audit log (no API key needed)")
+    p.add_argument("-n", "--limit", type=int, default=30)
+    p.add_argument("--all-users", action="store_true")
+    p.set_defaults(func=cmd_audit)
 
     return parser
 

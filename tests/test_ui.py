@@ -107,3 +107,40 @@ def test_unknown_route_is_404(ui):
     with pytest.raises(urllib.error.HTTPError) as err:
         _request(ui + "/api/nope")
     assert err.value.code == 404
+
+
+def test_history_and_audit_endpoints(ui, fake_llm):
+    fake_llm.json_queue.append(
+        {"facts": [{"content": "User likes hiking", "category": "preference",
+                    "importance": 0.7}]}
+    )
+    added = _request(ui + "/api/memories", "POST",
+                     {"content": "user: I like hiking on weekends",
+                      "user": "u1", "infer": True})
+    fact_id = added["facts"][0]["added"][0]
+
+    h = _request(ui + f"/api/memories/{fact_id}/history")
+    assert h["record"]["id"] == fact_id
+    assert h["sources"], "provenance should cite the source episode"
+    assert "retention" in h
+
+    audit = _request(ui + "/api/audit?user=u1")
+    assert any(e["action"] == "ADD" for e in audit["entries"])
+
+
+def test_reflect_endpoint(ui, memory, fake_llm):
+    memory.add("user: a note to reflect on", user_id="u1", infer=False)
+    fake_llm.json_queue.append({"insights": []})
+    r = _request(ui + "/api/reflect", "POST", {"user": "u1"})
+    assert r["examined_episodes"] == 1
+    assert r["insights"] == []
+
+
+def test_chat_returns_recalled_breakdown(ui, memory):
+    memory.add("user: I love climbing in the alps", user_id="u1", infer=False)
+    r = _request(ui + "/api/chat", "POST",
+                 {"message": "climbing alps tips", "history": [], "user": "u1"})
+    assert r["recalled"], "glass-box recall list should be returned"
+    item = r["recalled"][0]
+    for key in ("similarity", "retention", "importance", "strength", "score"):
+        assert key in item

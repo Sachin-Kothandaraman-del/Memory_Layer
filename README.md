@@ -1,8 +1,29 @@
 # memlayer
 
-**Persistent memory middleware for any LLM agent** — episodic + semantic memory with
-Gemini-powered extraction, consolidation, and hybrid retrieval. One SQLite file, no
-external services.
+**The transparent, self-reflecting memory layer for LLM agents** — episodic +
+semantic memory with Gemini-powered extraction, consolidation, and hybrid
+retrieval. One SQLite file, no external services.
+
+Most agent memory is a black box: facts appear, facts vanish, nobody knows
+why. memlayer is built around the opposite idea — **glass-box memory**:
+
+- **Every fact has provenance** — click any memory and see the raw episodes
+  it was distilled from, every version it went through, and the LLM's stated
+  reasoning for each change (a permanent audit trail).
+- **Memory never silently lies about the past** — updates *supersede* instead
+  of overwrite. Ask `as_of=<timestamp>` and retrieval answers with what was
+  believed *then* (time travel).
+- **It forgets like a human** — an Ebbinghaus-style forgetting curve: every
+  memory has a strength that grows when recalled and decays when ignored.
+  Trivia fades in weeks; reinforced facts become near-permanent. Faded
+  memories are excluded, not deleted — recoverable until pruned.
+- **It reflects** — a sleep-style consolidation pass (`memlayer reflect`)
+  reviews recent episodes and distills higher-order, evidence-cited insights
+  ("user is under recurring deployment pressure") that per-message extraction
+  can't see.
+- **Local-first privacy** — your agent's memory is a file you own. Optional
+  PII redaction runs *before* anything reaches the API, and "off the record"
+  requests are honored (nothing stored, audit entry only).
 
 ```
                        ┌──────────────────────────────────────────────┐
@@ -20,25 +41,32 @@ external services.
                        └──────────────────────────────────────────────┘
 ```
 
-## Features
+## Core features
 
 - **Two memory types** — *episodic* (raw events: what was said, when, in which
   session) and *semantic* (durable facts distilled by Gemini: identity,
-  preferences, goals, constraints, relationships...)
-- **LLM consolidation** — new facts are reconciled against existing ones
-  (ADD / UPDATE / DELETE / NONE), so the store converges to current truth
-  instead of accumulating contradictions
+  preferences, goals, constraints, relationships, reflected insights...)
+- **LLM consolidation with an audit trail** — new facts are reconciled against
+  existing ones (ADD / UPDATE / DELETE / NONE); every decision is recorded
+  with the LLM's reasoning, and updates keep the old version as history
 - **Hybrid retrieval** — Gemini embeddings (cosine) + SQLite FTS5 (BM25), fused
   with reciprocal-rank fusion, re-ranked by
-  `similarity·w₁ + recency-decay·w₂ + importance·w₃`, de-duplicated with MMR
+  `similarity·w₁ + retention·w₂ + importance·w₃`, de-duplicated with MMR
+- **Forgetting curve** — `retention = 0.5^(hours_since_recall / half_life)`
+  where the half-life scales with strength (grows ×1.8 per recall, capped) and
+  importance; below the retention floor a memory has faded out of retrieval
+- **Time travel** — `search(..., as_of=ts)` and `history(id)` expose the full
+  belief timeline; nothing is destroyed by consolidation
+- **Reflection** — `reflect()` reviews recent episodes and writes
+  evidence-cited insights, integrated through the same consolidation pipeline
+- **Privacy guards** — `redact_pii=True` scrubs emails/phones/cards/SSNs/IPs
+  with pure regex *before* embedding or extraction; "off the record" phrases
+  skip storage entirely; `forget()` is a true hard delete
 - **Token-budgeted context** — `get_context()` packs the best memories into a
   prompt block that fits your budget
 - **Drop-in middleware** — wrap any `chat_fn(messages) -> str`; recall happens
   before inference, recording happens after, on a background thread (zero
   added latency on the write path)
-- **Memory hygiene** — reinforcement on recall, `prune()` for stale low-value
-  episodes, `summarize_session()` to compress a session into one fact,
-  export/import as JSON
 - **Multi-tenant** — namespaced by `user_id` / `agent_id` / `session_id`
 - **Pluggable** — swap the store (subclass `MemoryStore`), the embedder, or the
   LLM; defaults are Gemini + SQLite
@@ -64,12 +92,19 @@ command that needs the API prints exactly how to fix it, and
 server — no extra dependencies, bound to localhost only):
 
 - **Chat** — talk to a Gemini agent that remembers you; every reply shows a
-  collapsible *"recalled N memories"* note with the exact context that was
-  injected, so you can watch the memory work
-- **Memories** — live hybrid search, filter by type, importance bars, recall
-  counts, one-click forget, per-user clearing
+  *"recalled N memories"* note with each memory's score breakdown
+  (similarity · retention · importance · strength) — click one to open its
+  full story
+- **Memories** — live hybrid search, type filter, importance + retention
+  bars, recall counts, one-click forget, a **show history** toggle that
+  reveals superseded versions and faded memories, and a **✨ Reflect** button
+- **Memory drawer** — click any memory: its belief timeline (every version,
+  when it held), the source episodes it was derived from, and its audit trail
+  with the LLM's reasoning
 - **Add memory** — store something manually and see which facts Gemini
-  extracted and whether they were added, updated, or already known
+  extracted, what the consolidator decided and *why*, and any PII redactions
+- **Activity** — the glass-box audit log: every ADD / UPDATE / RETRACT /
+  REFLECT / REDACT with reasoning
 
 Works without an API key too (browse/manage mode with keyword search).
 Use `--port` to change the port, `--no-browser` to skip auto-opening.
@@ -83,6 +118,9 @@ memlayer add "I'm Priya, I lead the data platform team" --user priya
 memlayer search "who leads data platform?" --user priya
 memlayer context "schedule a sync" --user priya   # the block an agent would see
 memlayer chat --user priya                        # interactive remembering agent
+memlayer reflect --user priya                     # distill insights from recent episodes
+memlayer history <id>                             # one memory's versions, sources, audit
+memlayer audit                                    # the glass-box activity log
 memlayer list / stats / forget <id> / clear       # inspect & manage (no API key needed)
 memlayer export -o backup.json / import backup.json
 memlayer prune --days 90                          # drop stale never-recalled episodes
@@ -151,8 +189,12 @@ def chat(messages): ...
 | `add_messages([{role, content}, ...])` | same, from OpenAI-style messages |
 | `search(query, limit=, memory_type=, ...)` | hybrid retrieval → `list[ScoredMemory]` |
 | `get_context(query, token_budget=)` | formatted prompt block (or `""`) |
-| `forget(id)` / `clear(user_id=)` | delete one / all memories |
-| `prune(max_age_days=, max_importance=)` | drop stale, never-recalled episodes |
+| `search(..., as_of=ts)` | time travel: what was believed at that moment |
+| `reflect(user_id=)` | distill evidence-cited insights from recent episodes |
+| `history(id)` | belief timeline + source episodes + audit trail |
+| `audit_log(user_id=)` | recent memory operations with LLM reasoning |
+| `forget(id)` / `clear(user_id=)` | hard-delete one / all memories (audited) |
+| `prune(max_age_days=, min_retention=)` | drop stale or fully-faded episodes |
 | `summarize_session(session_id)` | compress a session into one semantic memory |
 | `export(user_id=)` / `import_json(payload)` | JSON backup / restore |
 | `stats(user_id=)` | counts by memory type |
@@ -182,16 +224,22 @@ mem = MemoryLayer(MemoryConfig(
 
 ## Design notes
 
-- **Write path**: every `add()` stores the raw episode immediately, then (if
-  `infer`) Gemini extracts candidate facts. Each fact is embedded and compared
-  to existing semantic memories; if nothing is ≥ `consolidation_sim_threshold`
-  it is added directly (no LLM call), otherwise Gemini decides
-  ADD/UPDATE/DELETE/NONE. Extraction failures never lose the episode.
+- **Write path**: every `add()` first passes the privacy guards
+  (never-remember check, optional PII redaction), stores the raw episode,
+  then (if `infer`) Gemini extracts candidate facts. Each fact is embedded
+  and compared to existing semantic memories; if nothing is ≥
+  `consolidation_sim_threshold` it is added directly (no LLM call), otherwise
+  Gemini decides ADD/UPDATE/DELETE/NONE with stated reasoning. UPDATE writes
+  a *new version* and stamps the old one with `valid_until`/`superseded_by`;
+  DELETE retracts (invalidates) rather than destroys. Every decision lands in
+  the audit log. Extraction failures never lose the episode.
 - **Read path**: vector and keyword candidates are fused by reciprocal-rank
-  fusion (cosine is kept as the similarity signal), scored with exponential
-  recency decay (configurable half-life) and stored importance, then filtered
-  by MMR so near-duplicate memories don't waste the token budget. Recalled
-  memories are "reinforced" (access stats bumped) for use by `prune()`.
+  fusion (cosine is kept as the similarity signal), scored with
+  forgetting-curve retention and stored importance, floor-filtered (faded
+  memories drop out), then MMR-filtered so near-duplicates don't waste the
+  token budget. Recalled memories are reinforced: access stats bumped and
+  strength multiplied, so they decay slower next time. `as_of` queries are
+  read-only (no reinforcement) and see the world as it was believed then.
 - **Embeddings** are L2-normalized at write time (truncated Gemini embeddings
   are not pre-normalized), so similarity is a dot product.
 - **Concurrency**: one background writer thread keeps writes ordered;

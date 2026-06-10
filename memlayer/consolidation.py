@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .llm import LLM
 from .models import MemoryRecord
@@ -23,14 +23,15 @@ You maintain the long-term memory store of an AI agent. Given a NEW FACT and
 the most similar EXISTING MEMORIES, decide how to integrate the new fact.
 
 Operations:
-- {"op": "ADD"}
+- {"op": "ADD", "reasoning": "..."}
     the new fact is genuinely new information; store it as-is.
-- {"op": "UPDATE", "id": "<existing id>", "content": "<merged fact>"}
+- {"op": "UPDATE", "id": "<existing id>", "content": "<merged fact>",
+   "reasoning": "..."}
     the new fact refines, extends, or supersedes an existing memory;
     rewrite that memory so it reflects the latest truth.
-- {"op": "DELETE", "id": "<existing id>"}
+- {"op": "DELETE", "id": "<existing id>", "reasoning": "..."}
     an existing memory is now wrong or obsolete because of the new fact.
-- {"op": "NONE"}
+- {"op": "NONE", "reasoning": "..."}
     the new fact is already fully covered; do nothing.
 
 Rules:
@@ -38,6 +39,8 @@ Rules:
 - Newer information wins over older information when they conflict.
 - Multiple operations are allowed (e.g. UPDATE one memory and DELETE another).
 - If you UPDATE or DELETE, you usually should NOT also ADD the same content.
+- ALWAYS include "reasoning": one short sentence explaining the decision.
+  It becomes part of a permanent audit trail the user can inspect.
 
 Respond with JSON only: {"operations": [ ... ]}
 """
@@ -49,6 +52,7 @@ class ConsolidationResult:
     updated: list[MemoryRecord]
     deleted: list[str]
     skipped: bool = False  # NONE — fact already covered
+    operations: list[dict] = field(default_factory=list)  # ops + reasoning
 
 
 class Consolidator:

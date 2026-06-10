@@ -1,10 +1,20 @@
-"""Hybrid retrieval: vector + keyword search, fused and re-ranked.
+"""Hybrid retrieval: vector + keyword search, fused and re-ranked, with an
+Ebbinghaus-style forgetting curve.
 
 Pipeline:
 1. vector search (Gemini embeddings, cosine) and FTS5 keyword search
 2. reciprocal-rank fusion of the two candidate lists
-3. composite scoring: similarity * w1 + recency-decay * w2 + importance * w3
-4. MMR (maximal marginal relevance) to remove near-duplicate results
+3. composite scoring: similarity * w1 + retention * w2 + importance * w3
+4. forgetting: memories whose retention fell below the floor have "faded"
+   and are excluded (not deleted — they can be recovered or pruned later)
+5. MMR (maximal marginal relevance) to remove near-duplicate results
+6. reinforcement: returned memories are "touched", which bumps access stats
+   and multiplies strength — recalled memories decay slower next time
+
+Retention model: ``retention = 0.5 ** (hours_since_last_access / half_life)``
+where ``half_life = base_half_life * strength * (0.5 + 1.5 * importance)``.
+Important, frequently-recalled memories become near-permanent; trivia that
+is never recalled evaporates in weeks.
 """
 
 from __future__ import annotations
@@ -17,6 +27,19 @@ from .config import MemoryConfig
 from .embeddings import Embedder
 from .models import MemoryRecord, MemoryType, ScoredMemory
 from .storage.base import MemoryStore
+
+
+def retention_of(
+    record: MemoryRecord, config: MemoryConfig, now: float | None = None
+) -> float:
+    """Current retention (0..1) of a memory under the forgetting curve."""
+    now = now or time.time()
+    last = max(record.last_accessed_at, record.updated_at)
+    age_hours = max(0.0, (now - last) / 3600.0)
+    half_life = config.recency_half_life_hours
+    if config.enable_forgetting:
+        half_life *= record.strength * (0.5 + 1.5 * record.importance)
+    return 0.5 ** (age_hours / max(half_life, 1e-6))
 
 
 class Retriever:
@@ -34,12 +57,18 @@ class Retriever:
         session_id: str | None = None,
         memory_type: MemoryType | None = None,
         reinforce: bool = True,
+        include_faded: bool = False,
+        as_of: float | None = None,
     ) -> list[ScoredMemory]:
         cfg = self.config
         pool = max(cfg.candidate_pool, limit * 3)
+        if as_of is not None:
+            # historical queries are read-only and bypass the forgetting filter
+            reinforce = False
+            include_faded = True
         filters = dict(
             user_id=user_id, agent_id=agent_id,
-            session_id=session_id, memory_type=memory_type,
+            session_id=session_id, memory_type=memory_type, as_of=as_of,
         )
 
         query_vec = self.embedder.embed_query(query)
@@ -50,12 +79,19 @@ class Retriever:
         if not candidates:
             return []
 
-        scored = [self._score(rec, sim) for rec, sim in candidates.values()]
+        now = time.time()
+        scored = [self._score(rec, sim, now) for rec, sim in candidates.values()]
+        if cfg.enable_forgetting and not include_faded:
+            scored = [s for s in scored if s.recency >= cfg.retention_floor]
         scored.sort(key=lambda s: s.score, reverse=True)
         results = self._mmr(scored, limit)
 
         if reinforce and results:
-            self.store.touch([s.record.id for s in results])
+            self.store.touch(
+                [s.record.id for s in results],
+                strength_factor=cfg.strength_reinforce_factor,
+                strength_max=cfg.strength_max,
+            )
         return results
 
     # -- pipeline stages ------------------------------------------------------
@@ -82,20 +118,21 @@ class Retriever:
         ordered = sorted(records, key=lambda i: rrf[i], reverse=True)
         return {i: records[i] for i in ordered}
 
-    def _score(self, record: MemoryRecord, similarity: float) -> ScoredMemory:
+    def _score(
+        self, record: MemoryRecord, similarity: float, now: float
+    ) -> ScoredMemory:
         cfg = self.config
-        age_hours = max(0.0, (time.time() - record.updated_at) / 3600.0)
-        recency = 0.5 ** (age_hours / cfg.recency_half_life_hours)
+        retention = retention_of(record, cfg, now)
         sim = max(0.0, min(1.0, similarity))
         score = (
             cfg.weight_similarity * sim
-            + cfg.weight_recency * recency
+            + cfg.weight_recency * retention
             + cfg.weight_importance * record.importance
         )
         return ScoredMemory(
             record=record,
             similarity=sim,
-            recency=recency,
+            recency=retention,
             importance=record.importance,
             score=score,
         )

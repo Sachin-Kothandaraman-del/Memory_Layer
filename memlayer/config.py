@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+from .privacy import DEFAULT_NEVER_REMEMBER
+
 
 def load_dotenv_file(path: str = ".env") -> None:
     """Load KEY=VALUE pairs from a .env file into os.environ.
@@ -67,6 +69,24 @@ class MemoryConfig:
     # --- Hygiene ---
     episodic_default_importance: float = 0.3
     semantic_default_importance: float = 0.6
+
+    # --- Forgetting curve (decay + reinforcement) ---
+    enable_forgetting: bool = True
+    strength_reinforce_factor: float = 1.8   # strength multiplier per recall
+    strength_max: float = 16.0
+    retention_floor: float = 0.05            # below this, a memory has "faded"
+
+    # --- Time travel (glass-box history) ---
+    keep_history: bool = True   # supersede facts instead of mutating/deleting
+
+    # --- Reflection ---
+    reflection_window: int = 50  # recent episodes considered per reflection pass
+
+    # --- Privacy ---
+    redact_pii: bool = False                 # scrub emails/phones/cards/SSNs/IPs
+    never_remember_patterns: list[str] = field(
+        default_factory=lambda: list(DEFAULT_NEVER_REMEMBER)
+    )
 
     extra: dict = field(default_factory=dict)
 

@@ -56,6 +56,8 @@ class FakeLLM:
             return self.json_queue.pop(0)
         if system and "memory-formation" in system:
             return {"facts": []}
+        if system and "reflection module" in system:
+            return {"insights": []}
         return {"operations": [{"op": "ADD"}]}
 
 

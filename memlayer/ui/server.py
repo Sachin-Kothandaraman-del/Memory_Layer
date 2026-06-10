@@ -115,10 +115,20 @@ class Handler(BaseHTTPRequestHandler):
                 self._html(self.server.index_html)
             elif url.path == "/api/health":
                 self._json(self._health())
+            elif url.path.startswith("/api/memories/") and url.path.endswith("/history"):
+                memory_id = url.path.split("/")[3]
+                h = self.server.mem.history(memory_id)
+                self._json(h if h else {"error": "not found"},
+                           200 if h else 404)
             elif url.path == "/api/memories":
                 self._json(self._memories(query))
             elif url.path == "/api/context":
                 self._json(self._context(query))
+            elif url.path == "/api/audit":
+                user = (query.get("user") or [None])[0]
+                limit = int((query.get("limit") or ["50"])[0])
+                self._json({"entries": self.server.mem.audit_log(
+                    user_id=user, limit=limit)})
             else:
                 self._json({"error": "not found"}, 404)
         except MissingAPIKeyError as exc:
@@ -135,6 +145,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(self._add(body))
             elif url.path == "/api/chat":
                 self._json(self._chat(body))
+            elif url.path == "/api/reflect":
+                user = body.get("user") or "default"
+                self._json(self.server.mem.reflect(user_id=user))
             elif url.path == "/api/clear":
                 user = body.get("user") or "default"
                 self._json({"deleted": self.server.mem.clear(user_id=user)})
@@ -177,16 +190,21 @@ class Handler(BaseHTTPRequestHandler):
         type_raw = (query.get("type") or [""])[0]
         memory_type = MemoryType(type_raw) if type_raw else None
         q = (query.get("q") or [""])[0].strip()
+        show_history = (query.get("history") or ["0"])[0] == "1"
+
+        def enrich(d: dict, record) -> dict:
+            d["retention"] = round(mem.retention(record), 3)
+            return d
 
         if q:
             try:
                 hits = mem.search(
                     q, limit=limit, user_id=user, memory_type=memory_type,
-                    reinforce=False,
+                    reinforce=False, include_faded=show_history,
                 )
                 items = []
                 for hit in hits:
-                    d = hit.record.to_dict()
+                    d = enrich(hit.record.to_dict(), hit.record)
                     d["score"] = round(hit.score, 3)
                     d["similarity"] = round(hit.similarity, 3)
                     items.append(d)
@@ -194,13 +212,19 @@ class Handler(BaseHTTPRequestHandler):
                         "stats": mem.stats(user_id=user)}
             except MissingAPIKeyError:
                 records = mem.store.keyword_search(
-                    q, limit=limit, user_id=user, memory_type=memory_type
+                    q, limit=limit, user_id=user, memory_type=memory_type,
+                    current_only=not show_history,
                 )
-                return {"mode": "keyword", "items": [r.to_dict() for r in records],
+                return {"mode": "keyword",
+                        "items": [enrich(r.to_dict(), r) for r in records],
                         "stats": mem.stats(user_id=user)}
 
-        records = mem.store.list(user_id=user, memory_type=memory_type, limit=limit)
-        return {"mode": "list", "items": [r.to_dict() for r in records],
+        records = mem.store.list(
+            user_id=user, memory_type=memory_type, limit=limit,
+            current_only=not show_history,
+        )
+        return {"mode": "list",
+                "items": [enrich(r.to_dict(), r) for r in records],
                 "stats": mem.stats(user_id=user)}
 
     def _context(self, query: dict) -> dict:
@@ -235,7 +259,7 @@ class Handler(BaseHTTPRequestHandler):
         chat_fn = self.server.chat_fn()
         middleware = self.server.middleware_for(user)
 
-        context = mem.get_context(message, user_id=user)
+        context, recalled = mem.build_context(message, user_id=user)
         messages = [
             m for m in history if m.get("role") in ("user", "assistant")
         ] + [{"role": "user", "content": message}]
@@ -245,7 +269,23 @@ class Handler(BaseHTTPRequestHandler):
         )
         reply = chat_fn(augmented)
         middleware.after(messages, reply)  # records exchange in the background
-        return {"reply": reply, "context": context}
+        return {
+            "reply": reply,
+            "context": context,
+            "recalled": [
+                {
+                    "id": s.record.id,
+                    "content": s.record.content,
+                    "memory_type": s.record.memory_type.value,
+                    "score": round(s.score, 3),
+                    "similarity": round(s.similarity, 3),
+                    "retention": round(s.recency, 3),
+                    "importance": round(s.importance, 2),
+                    "strength": round(s.record.strength, 2),
+                }
+                for s in recalled
+            ],
+        }
 
     # -- plumbing ---------------------------------------------------------------
 

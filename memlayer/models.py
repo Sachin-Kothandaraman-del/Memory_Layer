@@ -23,6 +23,7 @@ class FactCategory(str, Enum):
     CONSTRAINT = "constraint"      # hard rules ("never email after 6pm")
     EVENT = "event"                # notable dated occurrences
     KNOWLEDGE = "knowledge"        # domain facts the agent should retain
+    INSIGHT = "insight"            # higher-order pattern found by reflection
     OTHER = "other"
 
 
@@ -52,7 +53,19 @@ class MemoryRecord:
     updated_at: float = field(default_factory=now_ts)
     last_accessed_at: float = field(default_factory=now_ts)
     access_count: int = 0
+    strength: float = 1.0              # forgetting curve: grows with each recall
+    valid_from: float | None = None    # time-travel: when this version became true
+    valid_until: float | None = None   # None = still current
+    superseded_by: str | None = None   # id of the version that replaced this one
     embedding: list[float] | None = None  # populated on demand, not in to_dict()
+
+    def __post_init__(self) -> None:
+        if self.valid_from is None:
+            self.valid_from = self.created_at
+
+    @property
+    def is_current(self) -> bool:
+        return self.valid_until is None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -70,6 +83,10 @@ class MemoryRecord:
             "updated_at": self.updated_at,
             "last_accessed_at": self.last_accessed_at,
             "access_count": self.access_count,
+            "strength": self.strength,
+            "valid_from": self.valid_from,
+            "valid_until": self.valid_until,
+            "superseded_by": self.superseded_by,
         }
 
     @classmethod
@@ -89,6 +106,10 @@ class MemoryRecord:
             updated_at=d.get("updated_at", now_ts()),
             last_accessed_at=d.get("last_accessed_at", now_ts()),
             access_count=d.get("access_count", 0),
+            strength=d.get("strength", 1.0),
+            valid_from=d.get("valid_from"),
+            valid_until=d.get("valid_until"),
+            superseded_by=d.get("superseded_by"),
             embedding=d.get("embedding"),
         )
 
@@ -121,3 +142,28 @@ class ExtractedFact:
     content: str
     category: str = FactCategory.OTHER.value
     importance: float = 0.6
+
+
+@dataclass
+class AuditEntry:
+    """One entry in the glass-box audit log: what changed in memory and why."""
+
+    action: str                     # ADD/UPDATE/RETRACT/NONE/FORGET/CLEAR/
+                                    # PRUNE/REFLECT/REDACT/SKIPPED_PRIVATE
+    user_id: str | None = None
+    memory_id: str | None = None
+    reasoning: str | None = None    # the LLM's stated reasoning, when available
+    detail: dict[str, Any] = field(default_factory=dict)
+    id: str = field(default_factory=new_id)
+    ts: float = field(default_factory=now_ts)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "ts": self.ts,
+            "user_id": self.user_id,
+            "action": self.action,
+            "memory_id": self.memory_id,
+            "reasoning": self.reasoning,
+            "detail": self.detail,
+        }

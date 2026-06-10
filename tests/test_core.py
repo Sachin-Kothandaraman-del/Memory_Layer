@@ -39,7 +39,8 @@ def test_infer_false_skips_extraction(memory, fake_llm):
     assert all(c["kind"] != "json" for c in fake_llm.calls)
 
 
-def test_consolidation_update_path(memory, fake_llm):
+def test_consolidation_update_supersedes(memory, fake_llm):
+    memory.config.consolidation_sim_threshold = 0.5
     # first write: one fact, no similar memories -> direct ADD (no LLM decide)
     fake_llm.json_queue.append(
         {"facts": [{"content": "User lives in Berlin", "category": "identity",
@@ -57,14 +58,27 @@ def test_consolidation_update_path(memory, fake_llm):
     )
     fake_llm.json_queue.append(
         {"operations": [{"op": "UPDATE", "id": old_id,
-                         "content": "User lives in Munich (moved from Berlin)"}]}
+                         "content": "User lives in Munich (moved from Berlin)",
+                         "reasoning": "user moved cities"}]}
     )
     memory.add("user: actually I moved to Munich", user_id="u1")
 
+    # current view: exactly one fact, the new version
     facts = memory.store.list(user_id="u1", memory_type=MemoryType.SEMANTIC)
     assert len(facts) == 1
     assert "Munich" in facts[0].content
-    assert facts[0].id == old_id
+    assert facts[0].id != old_id  # supersession creates a new version
+
+    # time travel: the old version is kept, linked, and invalidated
+    old = memory.store.get(old_id)
+    assert old is not None
+    assert old.valid_until is not None
+    assert old.superseded_by == facts[0].id
+    all_versions = memory.store.list(
+        user_id="u1", memory_type=MemoryType.SEMANTIC, current_only=False
+    )
+    assert len(all_versions) == 2
+    assert memory.stats(user_id="u1")["archived"] == 1
 
 
 def test_consolidation_delete_and_add(memory, fake_llm):
@@ -83,13 +97,19 @@ def test_consolidation_delete_and_add(memory, fake_llm):
                     "category": "preference", "importance": 0.8}]}
     )
     fake_llm.json_queue.append(
-        {"operations": [{"op": "DELETE", "id": old.id}, {"op": "ADD"}]}
+        {"operations": [{"op": "DELETE", "id": old.id,
+                         "reasoning": "no longer vegetarian"},
+                        {"op": "ADD", "reasoning": "new dietary fact"}]}
     )
     memory.add("user: I eat fish now", user_id="u1")
 
     facts = memory.store.list(user_id="u1", memory_type=MemoryType.SEMANTIC)
     assert len(facts) == 1
     assert "fish" in facts[0].content
+    # the retracted fact is kept for time travel, just no longer current
+    retracted = memory.store.get(old.id)
+    assert retracted is not None
+    assert retracted.valid_until is not None
 
 
 def test_get_context_formats_and_respects_budget(memory, fake_llm):

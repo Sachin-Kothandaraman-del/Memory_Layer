@@ -46,12 +46,14 @@ def test_keyword_only_match_is_recoverable(store, fake_embedder):
 def test_recency_breaks_ties(store, fake_embedder):
     old = seed(store, fake_embedder, "user timezone is UTC plus one")
     new = seed(store, fake_embedder, "user timezone is UTC plus one again")
-    # backdate the old record by 60 days
+    # backdate the old record by 60 days (incl. last access — decay clock)
     old.created_at = old.updated_at = time.time() - 60 * 86400
+    old.last_accessed_at = old.updated_at
     store.add(old)
 
     retriever = build(store, fake_embedder, weight_recency=0.3,
-                      weight_similarity=0.5, weight_importance=0.2)
+                      weight_similarity=0.5, weight_importance=0.2,
+                      retention_floor=0.0)  # don't fade the old one out here
     results = retriever.search("user timezone", limit=2)
     by_id = {s.record.id: s for s in results}
     assert by_id[new.id].recency > by_id[old.id].recency
