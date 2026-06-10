@@ -86,6 +86,28 @@ needed), or `MemoryLayer(api_key=...)` in code. If anything is off, any
 command that needs the API prints exactly how to fix it, and
 `memlayer doctor --live` verifies your key with a real API call.
 
+## Echo — the consumer app built on memlayer
+
+```bash
+echo-journal        # opens http://127.0.0.1:8780
+```
+
+Echo is a journal you talk to, that lets you talk to your past self — a
+showcase of what the memory primitives enable as *product features*:
+
+- **Today** — write entries; Echo replies as a warm companion and shows what
+  it *remembered* before answering. "On this day" surfaces anniversaries.
+- **Rescue** — the forgetting curve as a feature: memories about to fade
+  appear here with a retention meter. **Keep** reinforces one (strength ×3,
+  audited as RESCUE); **Let go** releases it.
+- **Past self** — pick a date, ask a question; Echo answers using *only* what
+  you knew and believed that day (`as_of` time travel — no hindsight allowed).
+- **Insights** — evidence-cited reflections ("your energy dips are crowding
+  out exercise — drawn from 4 entries"); tap one to read the entries it
+  came from.
+- Private by default: PII redaction is **on**, "off the record" is honored,
+  and the whole journal is one local file (`echo.db`).
+
 ## Web dashboard
 
 `memlayer ui` starts a local dashboard at http://127.0.0.1:8765 (stdlib HTTP

@@ -18,15 +18,17 @@ dependencies = [
 
 [project.scripts]
 memlayer = "memlayer.cli:main"
+echo-journal = "echo_journal.server:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 
 [tool.setuptools.packages.find]
-include = ["memlayer*"]
+include = ["memlayer*", "echo_journal*"]
 
 [tool.setuptools.package-data]
 memlayer = ["ui/*.html"]
+echo_journal = ["*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
