@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>memlayer</title>
+<style>
+:root {
+  --bg:#f5f6fa; --card:#ffffff; --text:#1b1e28; --muted:#69707f;
+  --border:#e4e6ee; --accent:#6051e8; --accent-text:#ffffff;
+  --accent-soft:#edebfd; --green:#1a9e6e; --amber:#b97a0e; --red:#d23b4e;
+  --chip-sem:#6051e8; --chip-epi:#0e7fb9; --shadow:0 1px 3px rgba(20,22,40,.07);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:#0e1016; --card:#171a23; --text:#e8eaf2; --muted:#98a0b3;
+    --border:#272b38; --accent:#8a7cf6; --accent-text:#15131f;
+    --accent-soft:#272145; --green:#3ecf96; --amber:#e3a93e; --red:#f0697a;
+    --chip-sem:#a89bff; --chip-epi:#5fb9e8; --shadow:0 1px 3px rgba(0,0,0,.35);
+  }
+}
+* { box-sizing:border-box; margin:0; }
+body {
+  background:var(--bg); color:var(--text); font:15px/1.5 -apple-system,
+  "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+header {
+  position:sticky; top:0; z-index:10; display:flex; align-items:center;
+  gap:14px; padding:12px 22px; background:var(--card);
+  border-bottom:1px solid var(--border);
+}
+.brand { font-size:18px; font-weight:700; letter-spacing:.2px; }
+.brand span { color:var(--accent); }
+.badge {
+  font-size:12px; padding:3px 10px; border-radius:999px;
+  border:1px solid var(--border); color:var(--muted); white-space:nowrap;
+}
+.badge.ok { color:var(--green); border-color:var(--green); }
+.badge.warn { color:var(--amber); border-color:var(--amber); }
+.spacer { flex:1; }
+.userbox { display:flex; align-items:center; gap:6px; font-size:13px; color:var(--muted); }
+.userbox input {
+  width:130px; padding:5px 9px; border-radius:8px; border:1px solid var(--border);
+  background:var(--bg); color:var(--text); font-size:13px;
+}
+nav { display:flex; gap:6px; padding:14px 22px 0; max-width:900px; margin:0 auto; }
+nav button {
+  padding:7px 16px; border-radius:999px; border:1px solid var(--border);
+  background:var(--card); color:var(--muted); font-size:14px; cursor:pointer;
+}
+nav button.active { background:var(--accent); border-color:var(--accent);
+  color:var(--accent-text); font-weight:600; }
+main { max-width:900px; margin:0 auto; padding:18px 22px 60px; }
+section { display:none; } section.active { display:block; }
+.card {
+  background:var(--card); border:1px solid var(--border); border-radius:14px;
+  padding:16px; box-shadow:var(--shadow);
+}
+/* ---- chat ---- */
+#chat-log { display:flex; flex-direction:column; gap:10px; min-height:300px;
+  max-height:58vh; overflow-y:auto; padding:4px 2px 10px; }
+.msg { max-width:78%; padding:10px 14px; border-radius:14px; white-space:pre-wrap;
+  overflow-wrap:break-word; }
+.msg.user { align-self:flex-end; background:var(--accent); color:var(--accent-text);
+  border-bottom-right-radius:4px; }
+.msg.agent { align-self:flex-start; background:var(--card);
+  border:1px solid var(--border); border-bottom-left-radius:4px; }
+.msg.typing { color:var(--muted); font-style:italic; }
+details.recall { align-self:flex-start; max-width:78%; font-size:12.5px;
+  color:var(--muted); margin-top:-4px; }
+details.recall summary { cursor:pointer; user-select:none; }
+details.recall pre { margin-top:6px; padding:10px; border-radius:10px;
+  background:var(--accent-soft); color:var(--text); white-space:pre-wrap;
+  font:12px/1.5 Consolas, monospace; }
+.chatbar { display:flex; gap:8px; margin-top:12px; }
+.chatbar input { flex:1; padding:11px 14px; border-radius:12px;
+  border:1px solid var(--border); background:var(--card); color:var(--text);
+  font-size:15px; }
+.btn {
+  padding:10px 18px; border-radius:12px; border:none; background:var(--accent);
+  color:var(--accent-text); font-size:14px; font-weight:600; cursor:pointer;
+}
+.btn:disabled { opacity:.5; cursor:default; }
+.btn.ghost { background:transparent; border:1px solid var(--border);
+  color:var(--muted); font-weight:500; }
+.btn.danger { background:transparent; border:1px solid var(--red); color:var(--red); }
+/* ---- memories ---- */
+.toolbar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
+.toolbar input[type=search] { flex:1; min-width:200px; padding:9px 13px;
+  border-radius:10px; border:1px solid var(--border); background:var(--card);
+  color:var(--text); font-size:14px; }
+.toolbar select { padding:9px 10px; border-radius:10px; border:1px solid var(--border);
+  background:var(--card); color:var(--text); font-size:14px; }
+.mode-note { font-size:12.5px; color:var(--muted); margin:0 2px 10px; }
+.mem { display:flex; gap:12px; align-items:flex-start; padding:13px 14px;
+  background:var(--card); border:1px solid var(--border); border-radius:12px;
+  margin-bottom:8px; }
+.mem .body { flex:1; min-width:0; }
+.mem .content { overflow-wrap:break-word; }
+.mem .meta { display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+  margin-top:6px; font-size:12px; color:var(--muted); }
+.chip { font-size:11px; font-weight:700; padding:2px 8px; border-radius:999px;
+  letter-spacing:.4px; text-transform:uppercase; }
+.chip.semantic { color:var(--chip-sem); background:var(--accent-soft); }
+.chip.episodic { color:var(--chip-epi); background:color-mix(in srgb, var(--chip-epi) 13%, transparent); }
+.chip.cat { color:var(--muted); background:transparent; border:1px solid var(--border);
+  text-transform:none; font-weight:500; }
+.imp { width:46px; height:5px; border-radius:3px; background:var(--border);
+  overflow:hidden; flex:none; }
+.imp i { display:block; height:100%; background:var(--accent); }
+.score { font-size:12px; color:var(--green); font-weight:600; white-space:nowrap; }
+.del { border:none; background:none; color:var(--muted); font-size:16px;
+  cursor:pointer; padding:2px 6px; border-radius:6px; flex:none; }
+.del:hover { color:var(--red); background:color-mix(in srgb, var(--red) 12%, transparent); }
+.empty { text-align:center; color:var(--muted); padding:40px 10px; }
+/* ---- add ---- */
+#add-text { width:100%; min-height:110px; padding:12px 14px; border-radius:12px;
+  border:1px solid var(--border); background:var(--card); color:var(--text);
+  font:15px/1.5 inherit; resize:vertical; }
+.add-row { display:flex; gap:12px; align-items:center; margin-top:10px; flex-wrap:wrap; }
+.add-row label { font-size:13.5px; color:var(--muted); display:flex; gap:6px;
+  align-items:center; }
+#add-result { margin-top:14px; display:none; }
+#add-result h4 { font-size:13px; color:var(--muted); margin-bottom:8px;
+  text-transform:uppercase; letter-spacing:.5px; }
+.fact { padding:8px 12px; border-left:3px solid var(--accent);
+  background:var(--accent-soft); border-radius:0 10px 10px 0; margin-bottom:6px;
+  font-size:14px; }
+.fact .action { font-size:11.5px; color:var(--muted); }
+/* ---- toast ---- */
+#toast { position:fixed; left:50%; bottom:26px; transform:translateX(-50%);
+  max-width:600px; width:calc(100% - 40px); background:var(--card);
+  border:1px solid var(--red); color:var(--text); padding:13px 16px;
+  border-radius:12px; box-shadow:var(--shadow); display:none; z-index:50;
+  font-size:13px; white-space:pre-wrap; max-height:40vh; overflow:auto; }
+#toast.show { display:block; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">🧠 mem<span>layer</span></div>
+  <span class="badge" id="db-badge">…</span>
+  <span class="badge" id="key-badge">…</span>
+  <div class="spacer"></div>
+  <div class="userbox">user
+    <input id="user-input" list="user-list" value="default" spellcheck="false">
+    <datalist id="user-list"></datalist>
+  </div>
+</header>
+
+<nav>
+  <button data-tab="chat" class="active">Chat</button>
+  <button data-tab="memories">Memories <span id="mem-count"></span></button>
+  <button data-tab="add">Add memory</button>
+</nav>
+
+<main>
+  <section id="tab-chat" class="active">
+    <div class="card">
+      <div id="chat-log">
+        <div class="empty" id="chat-empty">Say hello — the agent recalls what it
+          knows about this user, and remembers what you tell it.</div>
+      </div>
+      <div class="chatbar">
+        <input id="chat-input" placeholder="Message the agent…" autocomplete="off">
+        <button class="btn" id="chat-send">Send</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-memories">
+    <div class="toolbar">
+      <input type="search" id="search-input" placeholder="Search memories (hybrid: meaning + keywords)…">
+      <select id="type-filter">
+        <option value="">All types</option>
+        <option value="semantic">Semantic (facts)</option>
+        <option value="episodic">Episodic (events)</option>
+      </select>
+      <button class="btn ghost" id="refresh-btn">Refresh</button>
+      <button class="btn danger" id="clear-btn">Clear user</button>
+    </div>
+    <div class="mode-note" id="mode-note"></div>
+    <div id="mem-list"></div>
+  </section>
+
+  <section id="tab-add">
+    <div class="card">
+      <textarea id="add-text" placeholder="What should the agent remember?&#10;e.g.  user: I'm Sachin, I prefer answers with Python examples."></textarea>
+      <div class="add-row">
+        <label><input type="checkbox" id="add-infer" checked>
+          extract durable facts with Gemini</label>
+        <div class="spacer"></div>
+        <button class="btn" id="add-btn">Remember</button>
+      </div>
+      <div id="add-result"></div>
+    </div>
+  </section>
+</main>
+
+<div id="toast"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
+  (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const user = () => $("user-input").value.trim() || "default";
+let history = [];   // chat history for the current user
+let hasKey = false;
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    headers: {"Content-Type": "application/json"}, ...opts,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { const e = new Error(data.error || res.statusText);
+    e.missingKey = data.missing_key; throw e; }
+  return data;
+}
+
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove("show"), 9000);
+  t.onclick = () => t.classList.remove("show");
+}
+
+/* ---------- header / health ---------- */
+async function loadHealth() {
+  try {
+    const h = await api("/api/health");
+    hasKey = h.has_key;
+    $("db-badge").textContent = h.db_path + " · " + h.stats.total + " memories";
+    const kb = $("key-badge");
+    if (h.has_key) { kb.textContent = "Gemini connected"; kb.className = "badge ok"; }
+    else { kb.textContent = "no API key — browse only"; kb.className = "badge warn";
+           kb.title = "Run 'memlayer init' in a terminal, then restart the UI."; }
+    $("user-list").innerHTML =
+      h.users.map((u) => `<option value="${esc(u)}">`).join("");
+  } catch (e) { toast(e.message); }
+}
+
+/* ---------- tabs ---------- */
+document.querySelectorAll("nav button").forEach((btn) => {
+  btn.onclick = () => {
+    document.querySelectorAll("nav button").forEach((b) => b.classList.remove("active"));
+    document.querySelectorAll("main section").forEach((s) => s.classList.remove("active"));
+    btn.classList.add("active");
+    $("tab-" + btn.dataset.tab).classList.add("active");
+    if (btn.dataset.tab === "memories") loadMemories();
+    if (btn.dataset.tab === "chat") $("chat-input").focus();
+  };
+});
+
+/* ---------- chat ---------- */
+function bubble(role, text) {
+  $("chat-empty")?.remove();
+  const div = document.createElement("div");
+  div.className = "msg " + role;
+  div.textContent = text;
+  $("chat-log").appendChild(div);
+  $("chat-log").scrollTop = $("chat-log").scrollHeight;
+  return div;
+}
+
+function recallNote(context) {
+  if (!context) return;
+  const n = (context.match(/^- /gm) || []).length;
+  const d = document.createElement("details");
+  d.className = "recall";
+  d.innerHTML = `<summary>🧠 recalled ${n} memor${n === 1 ? "y" : "ies"}</summary>
+    <pre>${esc(context)}</pre>`;
+  $("chat-log").appendChild(d);
+  $("chat-log").scrollTop = $("chat-log").scrollHeight;
+}
+
+async function sendChat() {
+  const input = $("chat-input");
+  const message = input.value.trim();
+  if (!message) return;
+  input.value = "";
+  input.disabled = $("chat-send").disabled = true;
+  bubble("user", message);
+  const typing = bubble("agent typing", "thinking…");
+  try {
+    const r = await api("/api/chat", {
+      method: "POST",
+      body: JSON.stringify({message, history, user: user()}),
+    });
+    typing.remove();
+    recallNote(r.context);
+    bubble("agent", r.reply);
+    history.push({role: "user", content: message},
+                 {role: "assistant", content: r.reply});
+    loadHealth();  // memory count likely changed
+  } catch (e) {
+    typing.remove();
+    bubble("agent", "(error — see message below)");
+    toast(e.message);
+  } finally {
+    input.disabled = $("chat-send").disabled = false;
+    input.focus();
+  }
+}
+$("chat-send").onclick = sendChat;
+$("chat-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") sendChat();
+});
+
+/* ---------- memories ---------- */
+function memCard(m) {
+  const date = new Date(m.updated_at * 1000).toLocaleDateString();
+  const score = m.score !== undefined
+    ? `<span class="score">${m.score.toFixed(3)}</span>` : "";
+  const cat = m.category ? `<span class="chip cat">${esc(m.category)}</span>` : "";
+  return `<div class="mem" data-id="${esc(m.id)}">
+    <div class="body">
+      <div class="content">${esc(m.content)}</div>
+      <div class="meta">
+        <span class="chip ${esc(m.memory_type)}">${esc(m.memory_type)}</span>
+        ${cat}<span>${date}</span>
+        <span class="imp" title="importance ${m.importance}">
+          <i style="width:${Math.round(m.importance * 100)}%"></i></span>
+        ${m.access_count ? `<span>recalled ${m.access_count}×</span>` : ""}
+        ${score}
+      </div>
+    </div>
+    <button class="del" title="forget this memory">✕</button>
+  </div>`;
+}
+
+async function loadMemories() {
+  const q = $("search-input").value.trim();
+  const type = $("type-filter").value;
+  try {
+    const params = new URLSearchParams({user: user(), limit: "100"});
+    if (q) params.set("q", q);
+    if (type) params.set("type", type);
+    const r = await api("/api/memories?" + params);
+    $("mem-count").textContent = `(${r.stats.total})`;
+    $("mode-note").textContent =
+      r.mode === "hybrid" ? "ranked by relevance · recency · importance" :
+      r.mode === "keyword" ? "keyword match only (no API key for semantic search)" :
+      "most recently updated first";
+    $("mem-list").innerHTML = r.items.length
+      ? r.items.map(memCard).join("")
+      : `<div class="empty">${q ? "No memories match that search."
+          : "No memories yet for this user. Try the Chat or Add tab."}</div>`;
+    document.querySelectorAll(".mem .del").forEach((btn) => {
+      btn.onclick = async () => {
+        const id = btn.closest(".mem").dataset.id;
+        try {
+          await api("/api/memories/" + id, {method: "DELETE"});
+          btn.closest(".mem").remove();
+          loadHealth();
+        } catch (e) { toast(e.message); }
+      };
+    });
+  } catch (e) { toast(e.message); }
+}
+
+let searchTimer;
+$("search-input").addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(loadMemories, 350);
+});
+$("type-filter").onchange = loadMemories;
+$("refresh-btn").onclick = loadMemories;
+$("clear-btn").onclick = async () => {
+  if (!confirm(`Delete ALL memories for user '${user()}'?`)) return;
+  try {
+    const r = await api("/api/clear", {method: "POST",
+      body: JSON.stringify({user: user()})});
+    toast(`Deleted ${r.deleted} memories.`);
+    loadMemories(); loadHealth();
+  } catch (e) { toast(e.message); }
+};
+
+/* ---------- add ---------- */
+$("add-btn").onclick = async () => {
+  const content = $("add-text").value.trim();
+  if (!content) return;
+  $("add-btn").disabled = true;
+  try {
+    const r = await api("/api/memories", {
+      method: "POST",
+      body: JSON.stringify({content, user: user(), infer: $("add-infer").checked}),
+    });
+    const facts = (r.facts || []).map((f) => {
+      const action = f.updated.length ? "updated existing fact"
+        : f.deleted.length ? "replaced obsolete fact"
+        : f.skipped ? "already known" : "new fact";
+      return `<div class="fact">${esc(f.content)}
+        <div class="action">${action}</div></div>`;
+    }).join("");
+    $("add-result").style.display = "block";
+    $("add-result").innerHTML = `<h4>Stored</h4>
+      <div class="fact">${esc(content)}<div class="action">episodic memory</div></div>
+      ${facts ? "<h4>Facts extracted</h4>" + facts
+              : "<div class='mode-note'>no durable facts extracted</div>"}`;
+    $("add-text").value = "";
+    loadHealth();
+  } catch (e) { toast(e.message); }
+  finally { $("add-btn").disabled = false; }
+};
+
+/* ---------- user switching ---------- */
+$("user-input").addEventListener("change", () => {
+  history = [];
+  $("chat-log").innerHTML =
+    `<div class="empty" id="chat-empty">Switched to user '${esc(user())}'.</div>`;
+  loadMemories(); loadHealth();
+});
+
+loadHealth();
+loadMemories();
+</script>
+</body>
+</html>
