@@ -27,7 +27,11 @@ from urllib import error as urlerror
 from urllib import request as urlrequest
 from urllib.parse import parse_qs, urlparse
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+PROJECT_ROOT = os.path.join(os.path.dirname(__file__), "..")
+# Append project root so local app modules are importable, but do not shadow
+# installed third-party packages (e.g., `supabase`) with same-named folders.
+if PROJECT_ROOT not in sys.path:
+    sys.path.append(PROJECT_ROOT)
 
 from echo_journal import logic  # noqa: E402
 from echo_journal.server import build_gemini_chat  # noqa: E402
