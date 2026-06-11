@@ -62,8 +62,15 @@ def get_auth_client():
     if _auth_client is None:
         from supabase import create_client
 
+        # Use service-role on the server so token verification is stable and
+        # independent of public/anon client restrictions.
+        api_key = (
+            os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+            or os.environ.get("SUPABASE_ANON_KEY")
+            or ""
+        )
         _auth_client = create_client(
-            os.environ["SUPABASE_URL"], os.environ["SUPABASE_ANON_KEY"]
+            os.environ["SUPABASE_URL"], api_key
         )
     return _auth_client
 

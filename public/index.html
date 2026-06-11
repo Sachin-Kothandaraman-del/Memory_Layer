@@ -394,10 +394,18 @@ function authMsg(msg, cls) {
 
 $("auth-signin").onclick = async () => {
   authMsg("signing in…");
-  const {error} = await sb.auth.signInWithPassword({
+  const {data, error} = await sb.auth.signInWithPassword({
     email: $("auth-email").value.trim(), password: $("auth-pass").value,
   });
-  if (error) authMsg(error.message, "err"); else authMsg("");
+  if (error) {
+    authMsg(error.message, "err");
+    return;
+  }
+  if (data && data.session) {
+    session = data.session;
+    render();
+  }
+  authMsg("");
 };
 $("auth-signup").onclick = async () => {
   authMsg("creating your account…");
