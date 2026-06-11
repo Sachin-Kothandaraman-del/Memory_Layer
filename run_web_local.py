@@ -10,7 +10,7 @@ Usage:
 Requirements (same as the deployed site — see .env.example / DEPLOY.md):
     .env containing SUPABASE_URL, SUPABASE_ANON_KEY,
     SUPABASE_SERVICE_ROLE_KEY, GEMINI_API_KEY
-    and the schema from supabase/schema.sql applied to your Supabase project.
+    and the schema from supabase_setup/schema.sql applied to your Supabase project.
 
 Without those the page still loads (you can see the account screen), but
 signing in and journaling will not work yet.

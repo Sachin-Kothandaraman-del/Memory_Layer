@@ -4,10 +4,14 @@ Implements the same :class:`MemoryStore` interface as the SQLite backend, so
 the whole memlayer pipeline (consolidation, forgetting curve, time travel,
 audit) runs unchanged against a hosted database.
 
-Requires the schema in ``supabase/schema.sql`` (memories + audit_log tables,
-pgvector, and the RPC functions used for vector/keyword search and touch).
-Uses the service-role key — run it ONLY on a server, never in a browser;
-user scoping is enforced by the calling code via ``user_id`` filters.
+Requires the schema in ``supabase_setup/schema.sql`` (memories + audit_log
+tables, pgvector, and the RPC functions used for vector/keyword search and
+touch). Uses the service-role key — run it ONLY on a server, never in a
+browser; user scoping is enforced by the calling code via ``user_id`` filters.
+
+Note: the SQL schema lives in ``supabase_setup/`` (not ``supabase/``) on
+purpose — a folder named ``supabase`` on the import path would shadow the
+installed ``supabase`` pip package and break ``import supabase``.
 """
 
 from __future__ import annotations
@@ -16,50 +20,12 @@ import json
 import logging
 import os
 import time
-import importlib
-import importlib.machinery
-import importlib.util
-import sys
 from typing import Any, Sequence
 
 from ..models import AuditEntry, MemoryRecord, MemoryType
 from .base import MemoryStore
 
 logger = logging.getLogger("memlayer")
-
-
-def _load_supabase_create_client():
-    """Resolve supabase.create_client even if a local `supabase/` folder exists."""
-    try:
-        mod = importlib.import_module("supabase")
-        create_client = getattr(mod, "create_client", None)
-        if create_client is not None:
-            return create_client
-    except Exception:  # noqa: BLE001 - fallback below
-        pass
-
-    # Fallback: explicitly search non-project sys.path entries for the installed
-    # package so namespace folders in the repo cannot shadow it.
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    for path in sys.path:
-        if not path:
-            continue
-        abs_path = os.path.abspath(path)
-        if abs_path.startswith(project_root):
-            continue
-        spec = importlib.machinery.PathFinder.find_spec("supabase", [path])
-        if spec is None or spec.loader is None:
-            continue
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        create_client = getattr(module, "create_client", None)
-        if create_client is not None:
-            return create_client
-
-    raise ImportError(
-        "Could not import `create_client` from installed `supabase` package. "
-        "Ensure `supabase` is installed in the runtime environment."
-    )
 
 
 class SupabaseMemoryStore(MemoryStore):
@@ -70,7 +36,8 @@ class SupabaseMemoryStore(MemoryStore):
         service_role_key: str | None = None,
     ):
         if client is None:
-            create_client = _load_supabase_create_client()
+            from supabase import create_client  # lazy: optional dependency
+
             url = url or os.environ["SUPABASE_URL"]
             service_role_key = service_role_key or os.environ[
                 "SUPABASE_SERVICE_ROLE_KEY"

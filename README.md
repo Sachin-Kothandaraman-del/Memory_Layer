@@ -118,7 +118,7 @@ the verified auth user id *is* the memlayer `user_id`. The cloud and local
 versions share the same endpoint logic ([echo_journal/logic.py](echo_journal/logic.py)).
 
 Follow [DEPLOY.md](DEPLOY.md) — about 10 minutes end to end:
-run [supabase/schema.sql](supabase/schema.sql) in your Supabase project,
+run [supabase_setup/schema.sql](supabase_setup/schema.sql) in your Supabase project,
 push to GitHub, import into Vercel, set four environment variables, deploy.
 
 ## Web dashboard

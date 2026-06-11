@@ -23,7 +23,7 @@ fine), and a Gemini API key (https://aistudio.google.com/apikey).
 
 1. supabase.com → **New project** (any name, choose a strong DB password).
 2. Open **SQL Editor → New query**, paste the entire contents of
-   [`supabase/schema.sql`](supabase/schema.sql), and **Run**. This creates
+   [`supabase_setup/schema.sql`](supabase_setup/schema.sql), and **Run**. This creates
    the `memories` and `audit_log` tables, enables pgvector, adds the search
    functions, and locks both tables down with RLS (only the server can
    touch them).
@@ -100,8 +100,9 @@ facts Gemini extracted, embeddings included.
 |---|---|
 | `not signed in` (401) right after login | Site URL mismatch in Supabase Auth URL configuration; or the browser blocked third-party storage — try a normal window. |
 | `No Gemini API key found` in responses | `GEMINI_API_KEY` env var missing in Vercel → add it and redeploy. |
-| `relation "memories" does not exist` | You skipped step 1.2 — run `supabase/schema.sql` in the SQL editor. |
+| `relation "memories" does not exist` | You skipped step 1.2 — run `supabase_setup/schema.sql` in the SQL editor. |
 | `function match_memories does not exist` | Same — the schema file creates the RPCs; run it fully. |
+| `cannot import name 'create_client' from 'supabase'` | A folder named `supabase/` was shadowing the pip package. Fixed: the SQL now lives in `supabase_setup/`. Make sure no `supabase/` folder remains in the repo, then redeploy. |
 | First request after idle is slow (~2-4s) | Serverless cold start (Python + numpy). Subsequent requests are fast. |
 | Build exceeds size limit | Make sure `.vercelignore` is committed (it excludes `.venv`, tests, dbs). |
 
