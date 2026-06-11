@@ -16,12 +16,50 @@ import json
 import logging
 import os
 import time
+import importlib
+import importlib.machinery
+import importlib.util
+import sys
 from typing import Any, Sequence
 
 from ..models import AuditEntry, MemoryRecord, MemoryType
 from .base import MemoryStore
 
 logger = logging.getLogger("memlayer")
+
+
+def _load_supabase_create_client():
+    """Resolve supabase.create_client even if a local `supabase/` folder exists."""
+    try:
+        mod = importlib.import_module("supabase")
+        create_client = getattr(mod, "create_client", None)
+        if create_client is not None:
+            return create_client
+    except Exception:  # noqa: BLE001 - fallback below
+        pass
+
+    # Fallback: explicitly search non-project sys.path entries for the installed
+    # package so namespace folders in the repo cannot shadow it.
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    for path in sys.path:
+        if not path:
+            continue
+        abs_path = os.path.abspath(path)
+        if abs_path.startswith(project_root):
+            continue
+        spec = importlib.machinery.PathFinder.find_spec("supabase", [path])
+        if spec is None or spec.loader is None:
+            continue
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        create_client = getattr(module, "create_client", None)
+        if create_client is not None:
+            return create_client
+
+    raise ImportError(
+        "Could not import `create_client` from installed `supabase` package. "
+        "Ensure `supabase` is installed in the runtime environment."
+    )
 
 
 class SupabaseMemoryStore(MemoryStore):
@@ -32,8 +70,7 @@ class SupabaseMemoryStore(MemoryStore):
         service_role_key: str | None = None,
     ):
         if client is None:
-            from supabase import create_client  # lazy optional dependency
-
+            create_client = _load_supabase_create_client()
             url = url or os.environ["SUPABASE_URL"]
             service_role_key = service_role_key or os.environ[
                 "SUPABASE_SERVICE_ROLE_KEY"
