@@ -121,6 +121,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._html(self.server.index_html)
             elif url.path == "/api/state":
                 self._json(logic.state(mem, user))
+            elif url.path == "/api/today":
+                self._json(logic.today(mem, user))
             elif url.path == "/api/rescue":
                 self._json(logic.rescue(mem, user))
             elif url.path == "/api/pastself":

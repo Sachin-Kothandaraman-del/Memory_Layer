@@ -11,6 +11,7 @@ import urllib.request
 
 import pytest
 
+from echo_journal import logic
 from echo_journal.server import RESCUE_THRESHOLD, create_server
 from memlayer.models import MemoryType
 
@@ -192,3 +193,58 @@ def test_off_the_record_entry(echo, memory):
                   "user": "me"})
     assert r["skipped_private"] is True
     assert memory.stats(user_id="me")["total"] == 0
+
+
+def test_today_feed_persists_across_reloads(echo, memory):
+    _request(echo + "/api/entry", "POST",
+             {"text": "morning entry about coffee", "history": [], "user": "me"})
+    _request(echo + "/api/entry", "POST",
+             {"text": "evening entry about the gym", "history": [], "user": "me"})
+    # an entry from another day must not appear in today's feed
+    yesterday = (dt.date.today() - dt.timedelta(days=1)).isoformat()
+    memory.add("old entry from yesterday", user_id="me",
+               session_id=yesterday, infer=False)
+
+    r = _request(echo + "/api/today?user=me")
+    contents = [item["content"] for item in r["items"]]
+    assert contents == ["morning entry about coffee",
+                        "evening entry about the gym"]  # chronological
+    assert all("yesterday" not in c for c in contents)
+
+
+def test_entries_in_last_hour_counts_recent_only(memory):
+    for text in ("note one", "note two", "note three"):
+        memory.add(text, user_id="me", infer=False)
+    # backdate one entry beyond the window
+    rec = memory.store.list(user_id="me", memory_type=MemoryType.EPISODIC)[0]
+    rec.created_at = time.time() - 2 * 3600
+    memory.store.add(rec)
+    assert logic.entries_in_last_hour(memory, "me") == 2
+    assert logic.entries_in_last_hour(memory, "someone-else") == 0
+
+
+def test_weekly_reflection_runs_for_active_users(memory, fake_llm):
+    # two active users, one inactive
+    r1 = memory.add("user a shipped the launch", user_id="a1", infer=False)
+    memory.add("user b started a garden", user_id="b2", infer=False)
+    res = memory.add("ancient note", user_id="c3", infer=False)
+    _backdate(memory, res["episodic"], days=30)
+
+    # a1's reflection finds one insight; b2's finds none (default fake)
+    fake_llm.json_queue.append(
+        {"insights": [{"insight": "User a is focused on launching",
+                       "evidence": [r1["episodic"]], "confidence": 0.7,
+                       "reasoning": "launch mentioned"}]}
+    )
+    out = logic.weekly_reflection(memory)
+    assert out == {"reflected_users": 2, "insights_created": 1}
+
+    audits_a = [e for e in memory.audit_log(user_id="a1")
+                if e["action"] == "REFLECT_RUN"]
+    assert len(audits_a) == 1
+    assert not [e for e in memory.audit_log(user_id="c3")
+                if e["action"] == "REFLECT_RUN"], "inactive user skipped"
+
+    # within the cooldown window nothing re-runs (cron retries are safe)
+    assert logic.weekly_reflection(memory) == {"reflected_users": 0,
+                                               "insights_created": 0}

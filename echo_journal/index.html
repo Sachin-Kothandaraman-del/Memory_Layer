@@ -355,6 +355,19 @@ function feedAdd(html) {
   $("feed").scrollTop = $("feed").scrollHeight;
 }
 
+async function loadToday() {
+  // restore today's entries after a reload
+  try {
+    const r = await api(`/api/today?user=${USER}`);
+    if (!r.items.length) return;
+    feedAdd(r.items.map((m) => {
+      const when = new Date(m.created_at * 1000).toLocaleTimeString([],
+        {hour: "2-digit", minute: "2-digit"});
+      return `<div class="entry"><div class="when">${when}</div>${esc(m.content)}</div>`;
+    }).join(""));
+  } catch (e) { /* quiet */ }
+}
+
 async function sendEntry() {
   const input = $("entry-input");
   const text = input.value.trim();
@@ -503,6 +516,7 @@ $("reflect-btn").onclick = async () => {
 
 loadState();
 loadOnThisDay();
+loadToday();
 </script>
 </body>
 </html>

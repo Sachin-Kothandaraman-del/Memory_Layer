@@ -9,10 +9,14 @@ and returns a JSON-serializable dict.
 from __future__ import annotations
 
 import datetime as dt
+import logging
+import time
 from typing import Callable
 
 from memlayer import MemoryLayer, MemoryType
 from memlayer.models import AuditEntry
+
+logger = logging.getLogger("echo")
 
 RESCUE_THRESHOLD = 0.35   # below this retention a memory shows up in Rescue
 RESCUE_BOOST = 3.0        # strength multiplier when the user keeps a memory
@@ -34,6 +38,77 @@ knowledge. If the memories don't cover the question, say so honestly and
 briefly. Keep it to 2-5 sentences."""
 
 ChatFn = Callable[[list[dict]], str]
+
+
+def today(mem: MemoryLayer, user: str) -> dict:
+    """Today's journal entries, oldest first — so a reload shows the day so far."""
+    day = dt.date.today().isoformat()
+    episodes = mem.store.list(
+        user_id=user, session_id=day,
+        memory_type=MemoryType.EPISODIC, limit=500,
+    )
+    episodes.sort(key=lambda r: r.created_at)
+    return {
+        "items": [
+            {"id": e.id, "content": e.content, "created_at": e.created_at}
+            for e in episodes
+        ]
+    }
+
+
+def entries_in_last_hour(mem: MemoryLayer, user: str) -> int:
+    """How many entries this user wrote in the past hour (for rate limiting)."""
+    cutoff = time.time() - 3600.0
+    recent = mem.store.list(
+        user_id=user, memory_type=MemoryType.EPISODIC,
+        limit=300, current_only=False,
+    )
+    return sum(1 for r in recent if r.created_at >= cutoff)
+
+
+def weekly_reflection(
+    mem: MemoryLayer,
+    max_users: int = 3,
+    active_days: float = 7.0,
+    cooldown_days: float = 6.0,
+) -> dict:
+    """Run a reflection pass for users active this week (for the cron job).
+
+    Caps work per invocation (serverless time budget) and records a
+    REFLECT_RUN audit entry per user so retries within ``cooldown_days``
+    don't re-reflect the same people.
+    """
+    now = time.time()
+    reflected = 0
+    insights_created = 0
+    for user in mem.store.users():
+        if reflected >= max_users:
+            break
+        latest = mem.store.list(
+            user_id=user, memory_type=MemoryType.EPISODIC, limit=1
+        )
+        if not latest or latest[0].updated_at < now - active_days * 86400.0:
+            continue  # not active this week
+        ran_recently = any(
+            e.action == "REFLECT_RUN" and e.ts >= now - cooldown_days * 86400.0
+            for e in mem.store.get_audit(user_id=user, limit=50)
+        )
+        if ran_recently:
+            continue
+        try:
+            result = mem.reflect(user_id=user)
+        except Exception as exc:  # noqa: BLE001 - one user must not kill the run
+            logger.error("weekly reflection failed for %s: %s", user, exc)
+            continue
+        mem.store.log_audit(AuditEntry(
+            action="REFLECT_RUN", user_id=user,
+            reasoning="scheduled weekly reflection",
+            detail={"insights": len(result["insights"]),
+                    "examined": result["examined_episodes"]},
+        ))
+        reflected += 1
+        insights_created += len(result["insights"])
+    return {"reflected_users": reflected, "insights_created": insights_created}
 
 
 def state(mem: MemoryLayer, user: str) -> dict:

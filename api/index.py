@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import sys
+import time
 from http.server import BaseHTTPRequestHandler
 from urllib import error as urlerror
 from urllib import request as urlrequest
@@ -44,6 +45,27 @@ logger = logging.getLogger("echo-cloud")
 # Module-level singletons survive across requests on a warm function instance
 _mem: MemoryLayer | None = None
 _chat_fn = None
+
+# Soft per-instance throttle for the cheaper Gemini endpoints. The entry
+# endpoint gets an exact, DB-backed limit (logic.entries_in_last_hour).
+_recent_calls: dict[tuple[str, str], list[float]] = {}
+
+
+def throttled(user: str, kind: str, max_per_hour: int) -> bool:
+    now = time.time()
+    key = (user, kind)
+    calls = [t for t in _recent_calls.get(key, []) if t > now - 3600.0]
+    if len(calls) >= max_per_hour:
+        _recent_calls[key] = calls
+        return True
+    calls.append(now)
+    _recent_calls[key] = calls
+    return False
+
+
+RATE_LIMIT_MESSAGE = (
+    "Echo needs a breather - you've done a lot this hour. Try again soon."
+)
 
 
 def get_mem() -> MemoryLayer:
@@ -133,6 +155,13 @@ class handler(BaseHTTPRequestHandler):  # noqa: N801 - Vercel naming convention
                 info["ok"] = info["supabase_import"] and all(info["env"].values())
                 self._json(info)
                 return
+            if url.path == "/api/cron/reflect":
+                # invoked by the Vercel cron, not by users (see vercel.json)
+                if not self._cron_authorized():
+                    self._json({"error": "unauthorized"}, 401)
+                    return
+                self._json(logic.weekly_reflection(get_mem()))
+                return
             user = authenticate(self.headers)
             if user is None:
                 self._json({"error": "not signed in"}, 401)
@@ -140,9 +169,14 @@ class handler(BaseHTTPRequestHandler):  # noqa: N801 - Vercel naming convention
             mem = get_mem()
             if url.path == "/api/state":
                 self._json(logic.state(mem, user))
+            elif url.path == "/api/today":
+                self._json(logic.today(mem, user))
             elif url.path == "/api/rescue":
                 self._json(logic.rescue(mem, user))
             elif url.path == "/api/pastself":
+                if throttled(user, "pastself", 20):
+                    self._json({"error": RATE_LIMIT_MESSAGE}, 429)
+                    return
                 self._json(logic.pastself(
                     mem, get_chat_fn(), user,
                     (query.get("date") or [""])[0],
@@ -175,6 +209,11 @@ class handler(BaseHTTPRequestHandler):  # noqa: N801 - Vercel naming convention
             body = self._body()
             mem = get_mem()
             if url.path == "/api/entry":
+                # exact DB-backed limit: protects the Gemini quota from abuse
+                limit = int(os.environ.get("ECHO_ENTRY_LIMIT_PER_HOUR", "30"))
+                if logic.entries_in_last_hour(mem, user) >= limit:
+                    self._json({"error": RATE_LIMIT_MESSAGE}, 429)
+                    return
                 self._json(logic.entry(
                     mem, get_chat_fn(), user,
                     body.get("text", ""), body.get("history") or [],
@@ -184,6 +223,9 @@ class handler(BaseHTTPRequestHandler):  # noqa: N801 - Vercel naming convention
             elif url.path == "/api/letgo":
                 self._json(logic.letgo(mem, user, body.get("id", "")))
             elif url.path == "/api/reflect":
+                if throttled(user, "reflect", 4):
+                    self._json({"error": RATE_LIMIT_MESSAGE}, 429)
+                    return
                 self._json(mem.reflect(user_id=user))
             else:
                 self._json({"error": "not found"}, 404)
@@ -194,6 +236,16 @@ class handler(BaseHTTPRequestHandler):  # noqa: N801 - Vercel naming convention
             self._json({"error": str(exc)}, 500)
 
     # -- plumbing ----------------------------------------------------------------
+
+    def _cron_authorized(self) -> bool:
+        """Vercel sends `Authorization: Bearer $CRON_SECRET` when that env
+        var is set on the project. Without a secret, fall back to checking
+        Vercel's cron user agent (weaker — set CRON_SECRET in production)."""
+        secret = os.environ.get("CRON_SECRET", "")
+        auth = self.headers.get("Authorization") or ""
+        if secret:
+            return auth == f"Bearer {secret}"
+        return "vercel-cron" in (self.headers.get("User-Agent") or "")
 
     def _body(self) -> dict:
         length = int(self.headers.get("Content-Length") or 0)

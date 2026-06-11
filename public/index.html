@@ -105,6 +105,17 @@ h2.head { font-family:Georgia, serif; font-weight:400; font-size:22px;
 .auth-card input:focus { border-color:rgba(124,108,240,.6); }
 .auth-actions { display:flex; gap:10px; margin-top:6px; }
 .auth-actions .btn { flex:1; }
+.auth-divider { display:flex; align-items:center; gap:12px; margin:16px 0 12px;
+  color:var(--soft); font-size:12px; }
+.auth-divider::before, .auth-divider::after { content:""; flex:1; height:1px;
+  background:var(--line); }
+.btn.google { width:100%; display:flex; align-items:center; justify-content:center;
+  gap:9px; background:#fff; color:#1b1e28; font-weight:600; box-shadow:none; }
+.btn.google:hover { transform:none; background:#f1f3f9; }
+.auth-links { text-align:center; margin-top:14px; }
+.auth-links a { color:var(--soft); font-size:12.5px; text-decoration:none;
+  border-bottom:1px dotted var(--soft); }
+.auth-links a:hover { color:var(--ink); }
 .auth-msg { margin-top:14px; font-size:13px; color:var(--soft);
   white-space:pre-wrap; }
 .auth-msg.err { color:var(--danger); }
@@ -229,11 +240,26 @@ details.remembered div { padding:6px 12px; margin-top:5px; border-radius:10px;
   <div class="glass auth-card">
     <h1>Welcome back</h1>
     <p>A journal you talk to, that lets you talk to your past self.</p>
-    <input type="email" id="auth-email" placeholder="email" autocomplete="email">
-    <input type="password" id="auth-pass" placeholder="password" autocomplete="current-password">
-    <div class="auth-actions">
-      <button class="btn" id="auth-signin">Sign in</button>
-      <button class="btn quiet" id="auth-signup">Create account</button>
+    <div id="auth-form">
+      <input type="email" id="auth-email" placeholder="email" autocomplete="email">
+      <input type="password" id="auth-pass" placeholder="password" autocomplete="current-password">
+      <div class="auth-actions">
+        <button class="btn" id="auth-signin">Sign in</button>
+        <button class="btn quiet" id="auth-signup">Create account</button>
+      </div>
+      <div class="auth-divider"><span>or</span></div>
+      <button class="btn google" id="auth-google">
+        <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.27-4.74 3.27-8.1z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23z"/><path fill="#FBBC05" d="M5.84 14.1A6.6 6.6 0 0 1 5.49 12c0-.73.13-1.44.35-2.1V7.06H2.18a11 11 0 0 0 0 9.88l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.16-3.16A10.96 10.96 0 0 0 12 1 11 11 0 0 0 2.18 7.06l3.66 2.84C6.71 7.3 9.14 5.38 12 5.38z"/></svg>
+        Continue with Google
+      </button>
+      <div class="auth-links"><a href="#" id="auth-forgot">Forgot password?</a></div>
+    </div>
+    <div id="recovery" style="display:none">
+      <p style="color:var(--soft);font-size:13.5px;margin-bottom:14px">
+        Welcome back — set a new password for your account.</p>
+      <input type="password" id="recovery-pass" placeholder="new password (6+ characters)"
+             autocomplete="new-password">
+      <button class="btn" id="recovery-save" style="width:100%">Save new password</button>
     </div>
     <div class="auth-msg" id="auth-msg"></div>
     <div class="auth-feats">
@@ -325,6 +351,8 @@ let sb = null;        // supabase client
 let session = null;
 let history = [];
 let currentUserId = null;  // tracks account switches so no UI state leaks
+let recoveryMode = false;  // true while the user sets a new password
+let feedLoaded = false;    // today's entries fetched for this account yet?
 
 /* ---------- night sky ---------- */
 (() => {
@@ -364,7 +392,11 @@ async function boot() {
     sb = supabase.createClient(cfg.supabase_url, cfg.supabase_anon_key);
     const {data} = await sb.auth.getSession();
     session = data.session;
-    sb.auth.onAuthStateChange((_event, s) => { session = s; render(); });
+    sb.auth.onAuthStateChange((event, s) => {
+      session = s;
+      if (event === "PASSWORD_RECOVERY") recoveryMode = true;
+      render();
+    });
     render();
   } catch (e) {
     $("auth").classList.add("open");
@@ -377,6 +409,7 @@ async function boot() {
 function resetWorkspace() {
   // wipe everything one account rendered before another account signs in
   history = [];
+  feedLoaded = false;
   $("feed").innerHTML = `<div class="empty" id="feed-empty"><span class="big">✦</span>
     Write something. Echo listens, remembers,<br>and will still know it
     months from now.</div>`;
@@ -396,11 +429,21 @@ function render() {
     currentUserId = uid;
     resetWorkspace();
   }
+  if (recoveryMode) {
+    // arrived via a password-reset email: ask for the new password first
+    $("app").classList.remove("open");
+    $("auth").classList.add("open");
+    $("auth-form").style.display = "none";
+    $("recovery").style.display = "block";
+    return;
+  }
+  $("auth-form").style.display = "";
+  $("recovery").style.display = "none";
   if (session) {
     $("auth").classList.remove("open");
     $("app").classList.add("open");
     $("who").textContent = session.user.email || "";
-    loadState(); loadOnThisDay();
+    loadState(); loadOnThisDay(); loadToday();
   } else {
     $("app").classList.remove("open");
     $("auth").classList.add("open");
@@ -440,6 +483,41 @@ $("auth-signup").onclick = async () => {
 $("auth-pass").addEventListener("keydown", (e) => {
   if (e.key === "Enter") $("auth-signin").click();
 });
+$("auth-google").onclick = async () => {
+  authMsg("opening Google sign-in…");
+  const {error} = await sb.auth.signInWithOAuth({
+    provider: "google",
+    options: {redirectTo: window.location.origin},
+  });
+  if (error) authMsg(error.message, "err");
+};
+$("auth-forgot").onclick = async (e) => {
+  e.preventDefault();
+  const email = $("auth-email").value.trim();
+  if (!email) {
+    authMsg("Type your email above first, then click \"Forgot password?\".", "err");
+    return;
+  }
+  authMsg("sending reset link…");
+  const {error} = await sb.auth.resetPasswordForEmail(email, {
+    redirectTo: window.location.origin,
+  });
+  authMsg(error ? error.message : "Reset link sent — check your email.",
+          error ? "err" : "ok");
+};
+$("recovery-save").onclick = async () => {
+  const pass = $("recovery-pass").value;
+  if (pass.length < 6) {
+    authMsg("Password must be at least 6 characters.", "err");
+    return;
+  }
+  const {error} = await sb.auth.updateUser({password: pass});
+  if (error) { authMsg(error.message, "err"); return; }
+  recoveryMode = false;
+  $("recovery-pass").value = "";
+  authMsg("");
+  render();
+};
 $("signout").onclick = async () => { await sb.auth.signOut(); };
 
 /* ---------- authed fetch ---------- */
@@ -497,6 +575,23 @@ function feedAdd(html) {
   div.innerHTML = html;
   while (div.firstChild) $("feed").appendChild(div.firstChild);
   $("feed").scrollTop = $("feed").scrollHeight;
+}
+
+async function loadToday() {
+  // restore today's entries after a reload, exactly once per account session
+  if (feedLoaded) return;  // token refreshes re-render; don't duplicate
+  feedLoaded = true;
+  try {
+    const r = await api("/api/today");
+    if (!r.items.length) return;
+    feedAdd(r.items.map((m) => {
+      const when = new Date(m.created_at * 1000).toLocaleTimeString([],
+        {hour: "2-digit", minute: "2-digit"});
+      return `<div class="entry"><div class="when">${when}</div>${esc(m.content)}</div>`;
+    }).join(""));
+  } catch (e) {
+    feedLoaded = false;  // retry on the next render
+  }
 }
 
 async function sendEntry() {

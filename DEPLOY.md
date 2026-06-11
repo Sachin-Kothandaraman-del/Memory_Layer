@@ -82,6 +82,42 @@ Open the Vercel URL → **Create account** → write an entry. Then check
 Supabase **Table Editor → memories**: you'll see the episodic row plus the
 facts Gemini extracted, embeddings included.
 
+## Optional: Google sign-in
+
+The "Continue with Google" button works once the provider is enabled:
+
+1. [Google Cloud Console](https://console.cloud.google.com/apis/credentials) →
+   **Create credentials → OAuth client ID** (type: Web application). Add this
+   **Authorized redirect URI** (replace with your project ref):
+   `https://<your-project-ref>.supabase.co/auth/v1/callback`
+2. Supabase → **Authentication → Providers → Google** → enable, paste the
+   Client ID and Client Secret → Save.
+
+Until then the button shows Supabase's "provider is not enabled" message —
+email/password keeps working regardless. Password reset ("Forgot password?")
+needs no setup beyond the Site URL from step 4.
+
+## Weekly reflection cron + rate limiting
+
+`vercel.json` defines a cron that calls `/api/cron/reflect` every Sunday
+18:00 UTC. It reflects over up to 3 users who were active that week (per-run
+cap keeps it inside the serverless time budget; an audit marker prevents
+double-runs on retries).
+
+- **Set a `CRON_SECRET` env var in Vercel** (any long random string).
+  Vercel automatically sends it with cron requests, and the endpoint
+  rejects callers without it.
+- Hobby-plan crons fire at most once per day, with loose timing within the
+  hour — fine for a weekly job.
+- Cold starts: Hobby crons can't run every few minutes, so if you want the
+  first request of the day to be fast, point a free uptime pinger
+  (UptimeRobot, cron-job.org) at `https://<your-site>/api/health`.
+
+Abuse protection: `/api/entry` is limited per user per hour (default 30,
+override with an `ECHO_ENTRY_LIMIT_PER_HOUR` env var); past-self queries and
+manual reflections have softer limits. Over-limit requests get HTTP 429 with
+a friendly message.
+
 ## Security model
 
 - The browser only ever holds the **anon key** (public by design) and the
