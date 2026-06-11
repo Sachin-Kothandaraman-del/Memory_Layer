@@ -324,6 +324,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
 let sb = null;        // supabase client
 let session = null;
 let history = [];
+let currentUserId = null;  // tracks account switches so no UI state leaks
 
 /* ---------- night sky ---------- */
 (() => {
@@ -373,12 +374,32 @@ async function boot() {
   }
 }
 
+function resetWorkspace() {
+  // wipe everything one account rendered before another account signs in
+  history = [];
+  $("feed").innerHTML = `<div class="empty" id="feed-empty"><span class="big">✦</span>
+    Write something. Echo listens, remembers,<br>and will still know it
+    months from now.</div>`;
+  $("otd").innerHTML = "";
+  $("rescue-list").innerHTML = "";
+  $("rescue-count").textContent = "";
+  $("insight-list").innerHTML = "";
+  $("past-result").innerHTML = "";
+  $("streak").textContent = "your memories, kept like starlight";
+}
+
 function render() {
+  // reset only when the signed-in user actually changes — token refreshes
+  // re-fire onAuthStateChange and must NOT wipe the feed mid-session
+  const uid = session && session.user ? session.user.id : null;
+  if (uid !== currentUserId) {
+    currentUserId = uid;
+    resetWorkspace();
+  }
   if (session) {
     $("auth").classList.remove("open");
     $("app").classList.add("open");
     $("who").textContent = session.user.email || "";
-    history = [];
     loadState(); loadOnThisDay();
   } else {
     $("app").classList.remove("open");
