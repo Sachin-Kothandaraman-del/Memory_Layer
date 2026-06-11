@@ -108,6 +108,19 @@ showcase of what the memory primitives enable as *product features*:
 - Private by default: PII redaction is **on**, "off the record" is honored,
   and the whole journal is one local file (`echo.db`).
 
+### Deploy Echo as a real website
+
+Echo also ships as a multi-user consumer site: static frontend + Python
+serverless function on **Vercel**, with **Supabase** providing account
+creation/sign-in (Supabase Auth) and storage (Postgres + pgvector via
+`SupabaseMemoryStore`). Every account gets a hard-isolated memory space —
+the verified auth user id *is* the memlayer `user_id`. The cloud and local
+versions share the same endpoint logic ([echo_journal/logic.py](echo_journal/logic.py)).
+
+Follow [DEPLOY.md](DEPLOY.md) — about 10 minutes end to end:
+run [supabase/schema.sql](supabase/schema.sql) in your Supabase project,
+push to GitHub, import into Vercel, set four environment variables, deploy.
+
 ## Web dashboard
 
 `memlayer ui` starts a local dashboard at http://127.0.0.1:8765 (stdlib HTTP

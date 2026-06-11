@@ -1,3 +1,5 @@
+# Deployment requirements (Vercel installs these for the api/ function).
+# For local development use:  pip install -e ".[dev]"
 google-genai>=1.0.0
 numpy>=1.26
-pytest>=8.0
+supabase>=2.4

@@ -1,5 +1,8 @@
 """Echo's local server: journal endpoints layered on a memlayer MemoryLayer.
 
+The endpoint logic itself lives in :mod:`echo_journal.logic` and is shared
+with the cloud deployment (api/index.py on Vercel + Supabase).
+
     GET  /                  the app
     GET  /api/state         streak, stats, fading count, key status
     POST /api/entry         {text, history, user} -> companion reply + memory ops
@@ -18,43 +21,29 @@ Binds to 127.0.0.1 only.
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import json
 import logging
 import os
 import threading
-import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from typing import Callable
 from urllib.parse import parse_qs, urlparse
 
-from memlayer import MemoryLayer, MemoryType
+from memlayer import MemoryLayer
 from memlayer.config import MemoryConfig, load_dotenv_file
-from memlayer.core import MISSING_KEY_MESSAGE, MissingAPIKeyError
-from memlayer.models import AuditEntry
+from memlayer.core import MissingAPIKeyError
+
+from . import logic
+from .logic import ECHO_SYSTEM, PASTSELF_SYSTEM, RESCUE_BOOST, RESCUE_THRESHOLD
+
+__all__ = [
+    "EchoServer", "create_server", "main",
+    "ECHO_SYSTEM", "PASTSELF_SYSTEM", "RESCUE_BOOST", "RESCUE_THRESHOLD",
+]
 
 logger = logging.getLogger("echo")
-
-RESCUE_THRESHOLD = 0.35   # below this retention a memory shows up in Rescue
-RESCUE_BOOST = 3.0        # strength multiplier when the user keeps a memory
-
-ECHO_SYSTEM = """\
-You are Echo, a warm, attentive journaling companion with long-term memory.
-The user is writing in their private journal; you are the quiet voice that
-listens. Respond briefly (2-4 sentences): reflect back what you heard,
-connect it to relevant past memories when they're provided, and occasionally
-ask ONE gentle follow-up question. Never lecture, never therapize, never
-diagnose. You are a companion, not a coach."""
-
-PASTSELF_SYSTEM = """\
-You are the user's memory exactly as it existed on {date}. You may ONLY use
-the memories provided below — they are everything that was known and believed
-on that day. Answer in second person about what they knew, felt, wanted, or
-believed back then ("Back then, you were..."). Do not use any later
-knowledge. If the memories don't cover the question, say so honestly and
-briefly. Keep it to 2-5 sentences."""
 
 
 def _load_index() -> str:
@@ -63,6 +52,34 @@ def _load_index() -> str:
         .joinpath("index.html")
         .read_text(encoding="utf-8")
     )
+
+
+def build_gemini_chat(mem: MemoryLayer) -> Callable[[list[dict]], str]:
+    """Plain Gemini chat function used by both local and cloud deployments."""
+    key = mem._require_key()
+    from google import genai
+
+    client = genai.Client(api_key=key) if key else genai.Client()
+    model = mem.config.llm_model
+
+    def chat(messages: list[dict]) -> str:
+        system = "\n\n".join(
+            m["content"] for m in messages if m["role"] == "system"
+        )
+        contents = [
+            {"role": "model" if m["role"] == "assistant" else "user",
+             "parts": [{"text": m["content"]}]}
+            for m in messages
+            if m["role"] in ("user", "assistant")
+        ]
+        resp = client.models.generate_content(
+            model=model,
+            contents=contents,
+            config={"system_instruction": system or ECHO_SYSTEM},
+        )
+        return resp.text or ""
+
+    return chat
 
 
 class EchoServer(ThreadingHTTPServer):
@@ -84,34 +101,8 @@ class EchoServer(ThreadingHTTPServer):
     def chat_fn(self) -> Callable[[list[dict]], str]:
         with self._state_lock:
             if self._chat_fn is None:
-                self._chat_fn = self._build_gemini_chat()
+                self._chat_fn = build_gemini_chat(self.mem)
             return self._chat_fn
-
-    def _build_gemini_chat(self) -> Callable[[list[dict]], str]:
-        key = self.mem._require_key()
-        from google import genai
-
-        client = genai.Client(api_key=key) if key else genai.Client()
-        model = self.mem.config.llm_model
-
-        def chat(messages: list[dict]) -> str:
-            system = "\n\n".join(
-                m["content"] for m in messages if m["role"] == "system"
-            )
-            contents = [
-                {"role": "model" if m["role"] == "assistant" else "user",
-                 "parts": [{"text": m["content"]}]}
-                for m in messages
-                if m["role"] in ("user", "assistant")
-            ]
-            resp = client.models.generate_content(
-                model=model,
-                contents=contents,
-                config={"system_instruction": system or ECHO_SYSTEM},
-            )
-            return resp.text or ""
-
-        return chat
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -123,22 +114,28 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         url = urlparse(self.path)
         query = parse_qs(url.query)
+        mem = self.server.mem
+        user = (query.get("user") or ["me"])[0]
         try:
             if url.path in ("/", "/index.html"):
                 self._html(self.server.index_html)
             elif url.path == "/api/state":
-                self._json(self._state(query))
+                self._json(logic.state(mem, user))
             elif url.path == "/api/rescue":
-                self._json(self._rescue(query))
+                self._json(logic.rescue(mem, user))
             elif url.path == "/api/pastself":
-                self._json(self._pastself(query))
+                self._json(logic.pastself(
+                    mem, self.server.chat_fn(), user,
+                    (query.get("date") or [""])[0],
+                    (query.get("q") or [""])[0],
+                ))
             elif url.path == "/api/onthisday":
-                self._json(self._onthisday(query))
+                self._json(logic.onthisday(mem, user))
             elif url.path == "/api/insights":
-                self._json(self._insights(query))
+                self._json(logic.insights(mem, user))
             elif url.path.startswith("/api/story/"):
                 memory_id = url.path.rsplit("/", 1)[1]
-                h = self.server.mem.history(memory_id)
+                h = logic.story(mem, user, memory_id)
                 self._json(h if h else {"error": "not found"},
                            200 if h else 404)
             else:
@@ -151,18 +148,21 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         url = urlparse(self.path)
+        mem = self.server.mem
         try:
             body = self._body()
+            user = body.get("user") or "me"
             if url.path == "/api/entry":
-                self._json(self._entry(body))
+                self._json(logic.entry(
+                    mem, self.server.chat_fn(), user,
+                    body.get("text", ""), body.get("history") or [],
+                ))
             elif url.path == "/api/keep":
-                self._json(self._keep(body))
+                self._json(logic.keep(mem, user, body.get("id", "")))
             elif url.path == "/api/letgo":
-                memory_id = body.get("id", "")
-                self._json({"deleted": self.server.mem.forget(memory_id)})
+                self._json(logic.letgo(mem, user, body.get("id", "")))
             elif url.path == "/api/reflect":
-                user = body.get("user") or "me"
-                self._json(self.server.mem.reflect(user_id=user))
+                self._json(mem.reflect(user_id=user))
             else:
                 self._json({"error": "not found"}, 404)
         except MissingAPIKeyError as exc:
@@ -170,183 +170,6 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # noqa: BLE001
             logger.exception("echo request failed")
             self._json({"error": str(exc)}, 500)
-
-    # -- endpoints ----------------------------------------------------------------
-
-    def _state(self, query: dict) -> dict:
-        mem = self.server.mem
-        user = (query.get("user") or ["me"])[0]
-        episodes = mem.store.list(
-            user_id=user, memory_type=MemoryType.EPISODIC, limit=10_000
-        )
-        days = {e.session_id for e in episodes if e.session_id}
-        today = dt.date.today().isoformat()
-        return {
-            "has_key": bool(mem.config.resolve_api_key()),
-            "stats": mem.stats(user_id=user),
-            "journal_days": len(days),
-            "entries_today": sum(1 for e in episodes if e.session_id == today),
-            "fading_count": len(self._fading(user)),
-            "today": today,
-        }
-
-    def _fading(self, user: str) -> list[tuple[float, object]]:
-        mem = self.server.mem
-        fading = []
-        for rec in mem.store.list(user_id=user, limit=5000):
-            retention = mem.retention(rec)
-            if retention < RESCUE_THRESHOLD:
-                fading.append((retention, rec))
-        fading.sort(key=lambda pair: pair[0])
-        return fading
-
-    def _rescue(self, query: dict) -> dict:
-        mem = self.server.mem
-        user = (query.get("user") or ["me"])[0]
-        items = []
-        for retention, rec in self._fading(user)[:30]:
-            d = rec.to_dict()
-            d["retention"] = round(retention, 3)
-            items.append(d)
-        return {"items": items}
-
-    def _keep(self, body: dict) -> dict:
-        mem = self.server.mem
-        memory_id = body.get("id", "")
-        rec = mem.store.get(memory_id)
-        if rec is None:
-            return {"error": "not found"}
-        mem.store.touch(
-            [memory_id],
-            strength_factor=RESCUE_BOOST,
-            strength_max=mem.config.strength_max,
-        )
-        mem.store.log_audit(AuditEntry(
-            action="RESCUE", user_id=rec.user_id, memory_id=memory_id,
-            reasoning="user chose to keep this fading memory",
-        ))
-        rec = mem.store.get(memory_id)
-        return {
-            "kept": True,
-            "strength": round(rec.strength, 2),
-            "retention": round(mem.retention(rec), 3),
-        }
-
-    def _entry(self, body: dict) -> dict:
-        mem = self.server.mem
-        user = body.get("user") or "me"
-        text = (body.get("text") or "").strip()
-        history = body.get("history") or []
-        if not text:
-            return {"reply": "", "recalled": []}
-
-        # recall happens BEFORE the entry is stored, so the context is
-        # genuinely "what Echo already knew"
-        context, recalled = mem.build_context(text, user_id=user)
-        messages: list[dict] = [{"role": "system", "content": ECHO_SYSTEM}]
-        if context:
-            messages.append({"role": "system", "content": context})
-        messages += [
-            m for m in history if m.get("role") in ("user", "assistant")
-        ]
-        messages.append({"role": "user", "content": text})
-        reply = self.server.chat_fn()(messages)
-
-        result = mem.add(
-            text,
-            user_id=user,
-            session_id=dt.date.today().isoformat(),
-        )
-        return {
-            "reply": reply,
-            "recalled": self._recalled(recalled),
-            "entry_id": result.get("episodic"),
-            "facts": result.get("facts", []),
-            "skipped_private": result.get("skipped_private", False),
-            "redacted": result.get("redacted"),
-        }
-
-    def _pastself(self, query: dict) -> dict:
-        mem = self.server.mem
-        user = (query.get("user") or ["me"])[0]
-        date_str = (query.get("date") or [""])[0]
-        question = (query.get("q") or [""])[0].strip()
-        if not date_str or not question:
-            return {"answer": "", "recalled": [], "date": date_str}
-        day = dt.datetime.strptime(date_str, "%Y-%m-%d")
-        as_of = (day + dt.timedelta(days=1)).timestamp()  # end of that day
-
-        context, recalled = mem.build_context(
-            question, user_id=user, as_of=as_of
-        )
-        if not context:
-            return {
-                "answer": "I don't have any memories from back then that "
-                          "speak to that.",
-                "recalled": [], "date": date_str,
-            }
-        messages = [
-            {"role": "system",
-             "content": PASTSELF_SYSTEM.format(date=date_str)},
-            {"role": "system", "content": context},
-            {"role": "user", "content": question},
-        ]
-        answer = self.server.chat_fn()(messages)
-        return {
-            "answer": answer,
-            "recalled": self._recalled(recalled),
-            "date": date_str,
-        }
-
-    def _onthisday(self, query: dict) -> dict:
-        mem = self.server.mem
-        user = (query.get("user") or ["me"])[0]
-        today = dt.date.today()
-        items = []
-        for rec in mem.store.list(
-            user_id=user, memory_type=MemoryType.EPISODIC, limit=10_000
-        ):
-            then = dt.date.fromtimestamp(rec.created_at)
-            if then >= today or then.day != today.day:
-                continue
-            months = (today.year - then.year) * 12 + (today.month - then.month)
-            if months < 1:
-                continue
-            d = rec.to_dict()
-            d["ago"] = (f"{months // 12} year{'s' if months >= 24 else ''} ago"
-                        if months >= 12
-                        else f"{months} month{'s' if months > 1 else ''} ago")
-            items.append(d)
-        items.sort(key=lambda d: d["created_at"], reverse=True)
-        return {"items": items[:10]}
-
-    def _insights(self, query: dict) -> dict:
-        mem = self.server.mem
-        user = (query.get("user") or ["me"])[0]
-        records = mem.store.list(
-            user_id=user, memory_type=MemoryType.SEMANTIC, limit=1000
-        )
-        items = []
-        for rec in records:
-            if rec.category != "insight":
-                continue
-            d = rec.to_dict()
-            d["evidence_count"] = len(rec.source_ids)
-            items.append(d)
-        return {"items": items}
-
-    @staticmethod
-    def _recalled(scored) -> list[dict]:
-        return [
-            {
-                "id": s.record.id,
-                "content": s.record.content,
-                "memory_type": s.record.memory_type.value,
-                "score": round(s.score, 3),
-                "retention": round(s.recency, 3),
-            }
-            for s in scored
-        ]
 
     # -- plumbing ----------------------------------------------------------------
 
