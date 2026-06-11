@@ -112,6 +112,27 @@ class handler(BaseHTTPRequestHandler):  # noqa: N801 - Vercel naming convention
                     "supabase_anon_key": os.environ.get("SUPABASE_ANON_KEY", ""),
                 })
                 return
+            if url.path == "/api/health":
+                # public diagnostic: which build is live and can it reach its deps
+                info: dict = {
+                    "commit": os.environ.get("VERCEL_GIT_COMMIT_SHA", "")[:7],
+                    "env": {
+                        "SUPABASE_URL": bool(os.environ.get("SUPABASE_URL")),
+                        "SUPABASE_ANON_KEY": bool(os.environ.get("SUPABASE_ANON_KEY")),
+                        "SUPABASE_SERVICE_ROLE_KEY": bool(
+                            os.environ.get("SUPABASE_SERVICE_ROLE_KEY")),
+                        "GEMINI_API_KEY": bool(os.environ.get("GEMINI_API_KEY")),
+                    },
+                }
+                try:
+                    from supabase import create_client  # noqa: F401
+                    info["supabase_import"] = True
+                except Exception as exc:  # noqa: BLE001
+                    info["supabase_import"] = False
+                    info["supabase_import_error"] = str(exc)
+                info["ok"] = info["supabase_import"] and all(info["env"].values())
+                self._json(info)
+                return
             user = authenticate(self.headers)
             if user is None:
                 self._json({"error": "not signed in"}, 401)
