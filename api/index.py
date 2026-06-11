@@ -23,6 +23,8 @@ import logging
 import os
 import sys
 from http.server import BaseHTTPRequestHandler
+from urllib import error as urlerror
+from urllib import request as urlrequest
 from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -38,7 +40,6 @@ logger = logging.getLogger("echo-cloud")
 # Module-level singletons survive across requests on a warm function instance
 _mem: MemoryLayer | None = None
 _chat_fn = None
-_auth_client = None
 
 
 def get_mem() -> MemoryLayer:
@@ -57,24 +58,6 @@ def get_chat_fn():
     return _chat_fn
 
 
-def get_auth_client():
-    global _auth_client
-    if _auth_client is None:
-        from supabase import create_client
-
-        # Use service-role on the server so token verification is stable and
-        # independent of public/anon client restrictions.
-        api_key = (
-            os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-            or os.environ.get("SUPABASE_ANON_KEY")
-            or ""
-        )
-        _auth_client = create_client(
-            os.environ["SUPABASE_URL"], api_key
-        )
-    return _auth_client
-
-
 def authenticate(headers) -> str | None:
     """Resolve the Supabase access token to a user id (None = unauthorized)."""
     auth = headers.get("Authorization") or headers.get("authorization") or ""
@@ -83,10 +66,31 @@ def authenticate(headers) -> str | None:
     token = auth[len("Bearer "):].strip()
     if not token:
         return None
+
+    base_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    api_key = (
+        os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        or os.environ.get("SUPABASE_ANON_KEY")
+        or ""
+    )
+    if not base_url or not api_key:
+        return None
+
+    req = urlrequest.Request(
+        f"{base_url}/auth/v1/user",
+        headers={
+            "apikey": api_key,
+            "Authorization": f"Bearer {token}",
+        },
+        method="GET",
+    )
     try:
-        resp = get_auth_client().auth.get_user(token)
-        return resp.user.id if resp and resp.user else None
-    except Exception:  # noqa: BLE001 - invalid/expired token
+        with urlrequest.urlopen(req, timeout=10) as resp:
+            if resp.status != 200:
+                return None
+            payload = json.loads(resp.read().decode("utf-8"))
+            return payload.get("id")
+    except (urlerror.URLError, urlerror.HTTPError, TimeoutError, ValueError):
         return None
 
 
