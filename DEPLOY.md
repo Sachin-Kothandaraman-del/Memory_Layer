@@ -103,6 +103,7 @@ facts Gemini extracted, embeddings included.
 | `relation "memories" does not exist` | You skipped step 1.2 — run `supabase_setup/schema.sql` in the SQL editor. |
 | `function match_memories does not exist` | Same — the schema file creates the RPCs; run it fully. |
 | `cannot import name 'create_client' from 'supabase'` | A folder named `supabase/` was shadowing the pip package. Fixed: the SQL now lives in `supabase_setup/`. Make sure no `supabase/` folder remains in the repo, then redeploy. |
+| `No module named 'supabase'` | Vercel installs Python deps from `pyproject.toml` (not `requirements.txt`) when one exists at the root — `supabase` must be listed in `pyproject.toml` dependencies. It is now; pull latest and redeploy. |
 | First request after idle is slow (~2-4s) | Serverless cold start (Python + numpy). Subsequent requests are fast. |
 | Build exceeds size limit | Make sure `.vercelignore` is committed (it excludes `.venv`, tests, dbs). |
 
